@@ -1,11 +1,10 @@
-import os
-import numpy as np
-import torch
-from torch.utils.data import DataLoader
 import argparse
-#from tqdm import tqdm
 
+import numpy as np
 from dataset import ClassifierDataset
+from torch.utils.data import DataLoader
+
+# from tqdm import tqdm
 
 parser = argparse.ArgumentParser(description="Calculate mean and std of dataset")
 parser.add_argument("path", help="Path to dataset")
@@ -41,4 +40,3 @@ test_mean /= len(test_dataset)
 test_std /= len(test_dataset)
 print('Testing mean: {}'.format(test_mean))
 print('Testing std: {}'.format(test_std))
-

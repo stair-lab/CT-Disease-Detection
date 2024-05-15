@@ -1,11 +1,11 @@
 import os
+from argparse import ArgumentParser
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-
-from sklearn import metrics
 from sklearn import calibration
-from argparse import ArgumentParser
+from sklearn import metrics
 
 parser = ArgumentParser(description='Generate ROC, PR, and Calibration Curves given predicted scores and true labels')
 parser.add_argument('--predictions', '-p', default='out.csv', help='CSV containing all of the probability scores')
@@ -26,6 +26,7 @@ predicts = predicts.drop(columns=['STUDY', 'AGE', 'RAF', 'GENDER'])
 conditions = list(predicts.columns)
 print(conditions)
 
+
 def convert_labels(df):
     # convert df to proper labels
     ## skipping GENDER because predictions are almost perfect
@@ -36,6 +37,7 @@ def convert_labels(df):
     for c in conditions:
         df.loc[(df[c] == 'ABSENT'), c] = 0
         df.loc[(df[c] == 'PRESENT'), c] = 1
+
 
 convert_labels(labels)
 

@@ -1,20 +1,22 @@
+import io
 import os
 import shutil
+
 import torch
+import torch.nn as nn
+import torch.optim as optim
 
-# Functions in this file are inspired by the following:
-# https://github.com/cs230-stanford/cs230-code-examples/blob/master/pytorch/vision/utils.py
 
-def save_checkpoint(state, model_state, isbest, checkpoint):
+def save_checkpoint(state: dict, model_state: dict, isbest: bool, checkpoint: str):
     """
-    Saves model and training parameters at checkpoint + 'last.pth.tar'. If is_best==True, also saves
-    checkpoint + 'best.pth.tar'
-    @param state     : contains model's state_dict, may contain other keys such as epoch, optimizer state_dict (dict)
-    @param isbest   : True if it is the best model seen till now (bool)
-    @param checkpoint: folder where parameters are to be saved (string)
+    Save checkpoint
+    :param state: dict with keys: "epoch" - epoch num, "state_dict" - models, "optim_dict" - optimizer
+    :param model_state: like previous, but with "state_dict" key only
+    :param is_best: True if it is the best epoch in terms of loss
+    :checkpoint: directory in the local file system for saving checkpoints
     """
-    filepath = os.path.join(checkpoint, 'last.pth')
-    model_filepath = os.path.join(checkpoint, 'model_last.pth')
+    filepath = os.path.join(checkpoint, f'last_{EXPERIMENT_NAME}.pth')
+    model_filepath = os.path.join(checkpoint, f'model_last_{EXPERIMENT_NAME}.pth')
     if not os.path.exists(checkpoint):
         print("Checkpoint Directory does not exist! Making directory {}".format(checkpoint))
         os.makedirs(checkpoint)
@@ -23,17 +25,16 @@ def save_checkpoint(state, model_state, isbest, checkpoint):
     torch.save(model_state, model_filepath)
     if isbest:
         print("Saving best path")
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'best.pth'))
-        shutil.copyfile(model_filepath, os.path.join(checkpoint, 'model_best.pth'))
+        shutil.copyfile(filepath, os.path.join(checkpoint, f'best_{EXPERIMENT_NAME}.pth'))
+        shutil.copyfile(model_filepath, os.path.join(checkpoint, f'model_best_{EXPERIMENT_NAME}.pth'))
 
 
-def load_checkpoint(checkpoint, model, optimizer=None):
+def load_checkpoint(checkpoint: str, model: nn.Module, optimizer: optim.Optimizer = None):
     """
-    Loads model parameters (state_dict) from file_path. If optimizer is provided, loads state_dict of
-    optimizer assuming it is present in checkpoint.
-    @param checkpointdir: directory with checkpoint files (string)
-    @param model        : model for which the parameters are loaded (DeepConvNet)
-    @param optimizer    : resume optimizer from checkpoint (optim)
+    Load models and optimizer checkpoints
+    :param checkpoint: path in the local file system to checkpoints
+    :param model: models for loading state dict
+    :param optimizer: optimizer for loading state dict
     """
     if not os.path.exists(checkpoint):
         raise IOError("File doesn't exist {}".format(checkpoint))
@@ -51,12 +52,28 @@ def load_checkpoint(checkpoint, model, optimizer=None):
             state_dict[key.replace('1', '8').split('module.')[1]] = checkpoint['state_dict'][key]
         elif 'module.' in key:
             state_dict[key.split('module.')[1]] = checkpoint['state_dict'][key]
+        elif 'head.layers.8' in key:
+            continue
         else:
             state_dict[key] = checkpoint['state_dict'][key]
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=False)
 
     if optimizer:
         optimizer.load_state_dict(checkpoint['optim_dict'])
 
-    return checkpoint
 
+def export_to_onnx(model, imgs):
+    f = io.BytesIO()
+    f.name = 'models.onnx'
+    torch.onnx.export(model,  # models being run
+                      [img.to(model.device) for img in imgs] if isinstance(imgs, list) else imgs.to(model.device),
+                      # models input (or a tuple for multiple inputs)
+                      f,  # where to save the models (can be a file or file-like object)
+                      export_params=True,  # store the trained parameter weights inside the models file
+                      opset_version=10,  # the ONNX version to export the models to
+                      do_constant_folding=True,  # whether to execute constant folding for optimization
+                      input_names=['input'],  # the models's input names
+                      output_names=['output'],  # the models's output names
+                      dynamic_axes={'input': {0: 'batch_size'},  # variable length axes
+                                    'output': {0: 'batch_size'}})
+    return f

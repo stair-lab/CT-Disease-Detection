@@ -1,0 +1,17 @@
+captum==0.7.0
+click==8.1.7
+dill==0.3.8
+matplotlib==3.8.4
+numpy==1.25.2
+opencv_python==4.8.0.76
+opencv_python_headless==4.9.0.80
+pandas==2.2.2
+Pillow==10.3.0
+scikit_learn==1.4.2
+seaborn==0.13.2
+timm==0.9.16
+torch==2.3.0
+torchmetrics==1.4.0
+torchvision==0.18.0
+torchxrayvision==1.2.3
+tqdm==4.66.4

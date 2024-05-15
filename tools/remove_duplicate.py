@@ -1,6 +1,6 @@
-import os
-import pandas as pd
 from argparse import ArgumentParser
+
+import pandas as pd
 
 parser = ArgumentParser()
 parser.add_argument('--train', help='Test file to check')

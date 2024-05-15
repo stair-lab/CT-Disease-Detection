@@ -1,6 +1,8 @@
+from argparse import ArgumentParser
+
 import numpy as np
 import pandas as pd
-from argparse import ArgumentParser
+
 
 def arg_parse():
     parser = ArgumentParser()
@@ -9,6 +11,7 @@ def arg_parse():
     parser.add_argument('--out_file', default='output/predicted.csv', help='Output file with predictions')
     args = parser.parse_args()
     return args
+
 
 args = arg_parse()
 

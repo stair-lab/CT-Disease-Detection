@@ -1,2 +1,0 @@
-python train.py --checkpoint_dir checkpoints/test3 --pretrain chexpert_ckpt/chexpert_resnet_ckpt/best.pth --size 384 --lr 5e-4 --epochs 50
-python test.py --checkpoint_path checkpoints/test1/model_best.pth

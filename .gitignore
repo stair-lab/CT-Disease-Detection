@@ -3,4 +3,4 @@
 /chexpert_ckpt/
 /chexpert_ckpt.zip
 /.DS_Store
-**/__pycache__/
+/__pycache__/
