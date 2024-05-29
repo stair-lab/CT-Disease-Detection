@@ -27,7 +27,7 @@ def classification_regression_loss(conditions, y_pred: torch.Tensor, y_label: to
     label_conditions = y_label[:, class_ids]
     label_scores = y_label[:, reg_ids]
 
-    class_loss = F.binary_cross_entropy_with_logits(pred_conditions + 1e-5, label_conditions)
+    class_loss = F.binary_cross_entropy_with_logits(pred_conditions, label_conditions)
     reg_loss = F.mse_loss(pred_scores, label_scores)
 
     total_loss = class_loss.mean() + reg_loss.mean()

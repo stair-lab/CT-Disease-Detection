@@ -34,6 +34,7 @@ def arg_parse():
     parser.add_argument('--lr', default=1e-3, type=float, help="Learning rate")
     parser.add_argument('--epochs', default=1000, type=int, help="Number of epochs")
     parser.add_argument('--train_batch_size', default=64, type=int, help="Training batch size")
+    parser.add_argument('--val_batch_size', default=64, type=int, help="Validation batch size")
     parser.add_argument('--test_batch_size', default=64, type=int, help="Testing batch size")
     parser.add_argument('--num_workers', default=32, type=int, help="Number of workers used")
     parser.add_argument('--decay_start_epoch', default=15, type=int, help="Epoch to start learning rate decay")

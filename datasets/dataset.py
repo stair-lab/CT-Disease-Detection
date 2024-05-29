@@ -7,6 +7,7 @@ from torch.utils.data import Dataset
 from utils.labels import Gender, Condition
 from torchvision import transforms
 
+pd.set_option('display.max_columns', None)
 
 class ClassifierDataset(Dataset):
     """
