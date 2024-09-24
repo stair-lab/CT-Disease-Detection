@@ -20,16 +20,24 @@ def classification_regression_loss(conditions, y_pred: torch.Tensor, y_label: to
     :param y_label: tensor with ground truth labels
     :return: tensor with total loss value
     """
-    class_ids = [i for i in range(len(conditions)) if conditions[i].startswith('HCC')]
-    reg_ids = [i for i in range(len(conditions)) if not conditions[i].startswith('HCC')]
+    class_ids = [i for i in range(len(conditions)) if (conditions[i].startswith('HCC') or conditions[i] == 'GENDER')] # Treat Gender as Binary as well
+    reg_ids = [i for i in range(len(conditions)) if not (conditions[i].startswith('HCC') or conditions[i] == 'GENDER')]
     pred_conditions = y_pred[:, class_ids]
     pred_scores = y_pred[:, reg_ids]
     label_conditions = y_label[:, class_ids]
     label_scores = y_label[:, reg_ids]
 
-    class_loss = F.binary_cross_entropy_with_logits(pred_conditions, label_conditions)
+    # class_loss = F.binary_cross_entropy_with_logits(pred_conditions, label_conditions)
     reg_loss = F.mse_loss(pred_scores, label_scores)
 
-    total_loss = class_loss.mean() + reg_loss.mean()
+    # Removing some lines from Loss Calculation to only use Regression Loss (MSE)
+   
+    # if class_loss.mean().isnan() == True:
+    #     total_loss = reg_loss.mean()
+    # elif reg_loss.mean().isnan() == True:
+    #     total_loss = class_loss.mean()
+    # else:    
+    #     total_loss = class_loss.mean() + reg_loss.mean()
 
+    total_loss = reg_loss     
     return total_loss

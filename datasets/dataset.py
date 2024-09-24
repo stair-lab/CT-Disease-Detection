@@ -36,8 +36,19 @@ class ClassifierDataset(Dataset):
 
         # data cleaning
         self.df = self.df.loc[self.df['CTBiomarkers.BMDL1Values.BMDL1StandardHU'] != '--']
+        self.df = self.df.loc[self.df['GENDER'].str.contains('male')] # removing cases where GENDER is NA
+        # For Z-Score Normalization
+        self.calcium_mean = self.df['CTBiomarkers.CalciumScoring.AbdominalAgatston'].mean()
+        self.calcium_std = self.df['CTBiomarkers.CalciumScoring.AbdominalAgatston'].std()
+        self.muscle_mean = self.df['CTBiomarkers.MuscleValues.L1MuscleArea'].mean()
+        self.muscle_std = self.df['CTBiomarkers.MuscleValues.L1MuscleArea'].std()
 
-        self.conditions = self.df.columns.tolist()[1:]  # first column contains the input image
+        # For Min-Max Scalimg
+        self.calcium_max = self.df['CTBiomarkers.CalciumScoring.AbdominalAgatston'].max()
+        self.calcium_min = self.df['CTBiomarkers.CalciumScoring.AbdominalAgatston'].min()
+
+        # Focusing on Only 1 Continuous Target for now
+        self.conditions = [x for x in self.df.columns.to_list() if ('Calcium' in x)]
         self.transforms = transforms
         self.two_view = two_view
 
@@ -74,6 +85,10 @@ class ClassifierDataset(Dataset):
                 t[i] = float(data['RAF']) / self.raf_norm
             elif condition.startswith('HCC'):
                 t[i] = Condition.convert(data[condition])
+            elif condition.startswith('CTBiomarkers.CalciumScoring'):
+                t[i] = (float(data[condition]) - self.calcium_min) / (self.calcium_max - self.calcium_min) # Min-Max Scaling
+            elif condition.startswith('CTBiomarkers.MuscleValues'):
+                t[i] = (float(data[condition]) - self.muscle_mean) / self.muscle_std
             else:
                 try:
                     t[i] = float(data[condition])

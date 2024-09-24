@@ -14,7 +14,7 @@ from models.base_model import BaseModel
 from models.two_views_base_model import TwoViewsBaseModel
 from losses.loss import classification_regression_loss
 from utils.utils import init, arg_parse
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score, f1_score, r2_score, explained_variance_score
 from torch.utils.data import random_split, Subset
 from sklearn.model_selection import train_test_split
 from sklearn.exceptions import UndefinedMetricWarning
@@ -36,7 +36,10 @@ def compute_classification_metrics(y_score, y_pred, y_true):
 
 def compute_regression_metrics(y_score, y_true):
     metric = {
-        'mse': F.mse_loss(y_score, y_true).item()
+        'mse': F.mse_loss(y_score, y_true).item(),
+        # Additional Metrics for Continuous Targets
+        'r_squared': r2_score(y_true = y_true, y_pred = y_score),
+        'explained_variance': explained_variance_score(y_true = y_true, y_pred = y_score)
     }
 
     return metric
@@ -68,10 +71,10 @@ def evaluate(model: nn.Module, dataloader: DataLoader, evaluate_metrics=True):
     metrics = {}
     if evaluate_metrics:
         for i, condition in enumerate(model.conditions):
-            if condition.startswith('HCC'):
+            if (condition.startswith('HCC') or condition.startswith('GENDER')):
                 metrics[condition] = compute_classification_metrics(torch.sigmoid(all_y[:, i]), (torch.sigmoid(all_y[:, i]) > 0.5).type(torch.float), all_y_true[:, i])
             else:
-                metrics[condition] = compute_regression_metrics(all_y[:, i], all_y_true[:, i])
+                metrics[condition] = compute_regression_metrics(y_score = all_y[:, i], y_true = all_y_true[:, i])
 
     return total_loss, metrics
 
@@ -152,11 +155,10 @@ def run(args):
         shuffle=False,
         num_workers=args.num_workers
     )
-
     if args.two_view:
         model = TwoViewsBaseModel(train_dataset.dataset.conditions)
     else:
-        model = BaseModel(train_dataset.dataset.conditions)
+        model = BaseModel(train_dataset.dataset.conditions, only_last_layer=False)
 
     train(model, train_dataloader, val_dataloader, test_dataloader, args)
 
