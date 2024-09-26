@@ -2,6 +2,7 @@ import gc
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
 import json
 import os
 import warnings
@@ -85,10 +86,14 @@ def train(model: nn.Module, train_dataloader: DataLoader, val_dataloader: DataLo
     """
     ckpt_name = "two_view.ckpt" if args.two_view else "one_view.ckpt"
 
+    # Create a SummaryWriter to log events
+    writer = SummaryWriter('runs/optimizer_step_logging')
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
 
     min_loss = float('inf')
     early_stop = 0
+    global_step = 0
 
     for epoch in range(args.epochs):
 
@@ -101,12 +106,19 @@ def train(model: nn.Module, train_dataloader: DataLoader, val_dataloader: DataLo
             loss = classification_regression_loss(model.conditions, y, labels.to(model.device))
             loss.backward()
             optimizer.step()
+            # Log the loss value to TensorBoard for each step
+            writer.add_scalar('Loss/Train', loss.item(), global_step)
+            global_step += 1
 
             train_loss += loss.item()
 
         train_loss /= len(train_dataloader)
 
         val_loss, val_metrics = evaluate(model, val_dataloader, evaluate_metrics=True)
+        
+        # Log validation loss
+        writer.add_scalar('Validation Loss', val_loss, epoch)
+
 
         print(f"Epoch: {epoch+1} \t Train Loss: {train_loss:.3f} \t Val Loss: {val_loss:.3f} \t ")
 
@@ -119,6 +131,9 @@ def train(model: nn.Module, train_dataloader: DataLoader, val_dataloader: DataLo
 
         if early_stop >= args.early_stop_criteria:
             break
+
+    # Close the writer after training
+    writer.close()
 
     model.load_state_dict(torch.load(os.path.join(args.checkpoint_dir, ckpt_name)))
     test_loss, test_metrics = evaluate(model, test_dataloader)
