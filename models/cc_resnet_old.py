@@ -159,8 +159,8 @@ class Head(nn.Module):
         super().__init__()
 
         self.layers = nn.Sequential(
-            #AdaptiveConcatPool2d(sz=(1, 1)),
-            #nn.Flatten(),
+            AdaptiveConcatPool2d(sz=(1, 1)),
+            nn.Flatten(),
             nn.BatchNorm1d(in_planes, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
             nn.Dropout(p=0.25, inplace=False),
             nn.Linear(in_features=in_planes, out_features=mid_planes, bias=True),
@@ -255,7 +255,6 @@ class ResNet(nn.Module):
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-
         if self.add_head:
             x = self.head(x)
 

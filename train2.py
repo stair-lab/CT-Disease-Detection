@@ -12,6 +12,8 @@ from tqdm import tqdm
 
 from datasets.dataset import get_datasets
 from models.base_model import BaseModel
+from models.base_model_old import BaseModelOld
+
 from models.two_views_base_model import TwoViewsBaseModel
 from losses.loss import classification_regression_loss
 from utils.utils import init, arg_parse
@@ -100,7 +102,7 @@ def train(model: nn.Module, train_dataloader: DataLoader, val_dataloader: DataLo
         train_loss = 0
 
         model.train()
-        for x, labels in train_dataloader:
+        for x, labels in tqdm(train_dataloader):
             optimizer.zero_grad()
             y = model(x)
             loss = classification_regression_loss(model.conditions, y, labels.to(model.device))
@@ -118,7 +120,6 @@ def train(model: nn.Module, train_dataloader: DataLoader, val_dataloader: DataLo
         
         # Log validation loss
         writer.add_scalar('Validation Loss', val_loss, epoch)
-
 
         print(f"Epoch: {epoch+1} \t Train Loss: {train_loss:.3f} \t Val Loss: {val_loss:.3f} \t ")
 
@@ -174,6 +175,7 @@ def run(args):
         model = TwoViewsBaseModel(train_dataset.dataset.conditions)
     else:
         model = BaseModel(train_dataset.dataset.conditions, only_last_layer=False)
+        # model = BaseModelOld(train_dataset.dataset.conditions, checkpoint='checkpoints/model_best.pth')
 
     train(model, train_dataloader, val_dataloader, test_dataloader, args)
 

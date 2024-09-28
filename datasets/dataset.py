@@ -53,7 +53,7 @@ class ClassifierDataset(Dataset):
         self.two_view = two_view
 
         print(f'Dataset Statistics (train = {train}):')
-        print(self.df.describe(include='all'))
+        # print(self.df.describe(include='all'))
 
     def __len__(self):
         """
