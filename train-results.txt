@@ -1,0 +1,12 @@
+Epoch: [38/1000], Train loss: 99.5175, Test loss: 155.3327, Train score: nan, Test score: nan Train time: 42.21s, Test time: 31.04s
+                Train accuracy: Test accuracy:  Train AUROC:    Test AUROC:
+gender  :       99.3196%        98.6693%        99.9665         nan
+HCC18   :       89.0171%        88.6893%        83.2799         nan
+HCC22   :       93.7431%        92.6148%        nan             nan
+HCC85   :       88.1665%        88.0240%        83.9758         nan
+HCC96   :       86.4581%        83.4331%        81.8029         nan
+HCC108  :       76.7399%        73.5196%        79.5788         nan
+HCC111  :       88.9357%        87.8243%        81.2252         nan
+age MSE :       0.0002          0.0138
+raf MSE :       3.1123          310.0567
+
