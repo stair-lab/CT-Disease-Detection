@@ -23,7 +23,7 @@ from tqdm import tqdm
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 # conditions = ['gender', 'HCC18', 'HCC22', 'HCC40', 'HCC48', 'HCC59', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'HCC138', 'age MSE', 'raf MSE', 'BMI MSE','A1C MSE']
 #conditions = ['gender', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'age MSE', 'raf MSE']
-conditions = ['GENDER', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'CTBiomarkers.CalciumScoring.AbdominalAgatston_y', 'AGE', 'RAF']
+conditions = ['GENDER', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'CTBiomarkers.CalciumScoring.AbdominalAgatston_y', 'AGE', 'RAF']
 num_classes = len(conditions) - 2
 
 def arg_parse():
@@ -106,14 +106,14 @@ def train_epoch(model, dataloader, optimizer):
         loss = multilabel_regression_loss(prediction, labels)
         tot_loss += loss.item()
 
-        # accuracy += calculate_accuracy(prediction, labels)
+        accuracy += calculate_accuracy(prediction, labels)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         del img, labels, prediction
-    # accuracy /= len(dataloader.dataset)
+    accuracy /= len(dataloader.dataset)
 
     return tot_loss/(i+1), accuracy, 100 * tot_score/(i + 1), 100 * class_score/(i + 1)
 
@@ -125,19 +125,19 @@ def train(model, train_dataloader, test_dataloader, optimizer, scheduler, epochs
         print(f'Epoch {epoch}')
 
         start_train_time = time()
-        # train_loss, train_accuracy, train_auroc, train_class_auroc = train_epoch(model, train_dataloader, optimizer)
-        # scheduler.step(train_loss)
+        train_loss, train_accuracy, train_auroc, train_class_auroc = train_epoch(model, train_dataloader, optimizer)
+        scheduler.step(train_loss)
         train_time = time() - start_train_time
 
         start_test_time = time()
         test_loss, test_accuracy, test_auroc, test_class_auroc = test(model, test_dataloader)
         test_time = time() - start_test_time
 
-        # print('Epoch: [{}/{}], Train loss: {:.4f}, Test loss: {:.4f}, Train score: {:.2f}, Test score: {:.2f} Train time: {:.2f}s, Test time: {:.2f}s'.format(epoch+1, epochs, train_loss, test_loss, train_auroc, test_auroc, train_time, test_time))
-        #print('\t\tTrain AUROC:\tTest AUROC:')
-        #print_auroc(train_class_auroc, test_class_auroc)
-        #print('\t\t  Train accuracy:\tTest accuracy:')
-        # print_accuracy(train_accuracy, test_accuracy, train_class_auroc, test_class_auroc)
+        print('Epoch: [{}/{}], Train loss: {:.4f}, Test loss: {:.4f}, Train score: {:.2f}, Test score: {:.2f} Train time: {:.2f}s, Test time: {:.2f}s'.format(epoch+1, epochs, train_loss, test_loss, train_auroc, test_auroc, train_time, test_time))
+        print('\t\tTrain AUROC:\tTest AUROC:')
+        print_auroc(train_class_auroc, test_class_auroc)
+        print('\t\t  Train accuracy:\tTest accuracy:')
+        print_accuracy(train_accuracy, test_accuracy, train_class_auroc, test_class_auroc)
 
         print('AUROC Score:')
         for i in range(num_classes):
@@ -233,7 +233,7 @@ else:
     #model = resnet34(pretrained=False, num_classes=num_classes+2).to(device)'''
 
 model = ResNet34(num_classes=num_classes+2)
-load_checkpoint('checkpoints/model_best_copy.pth', model)
+# load_checkpoint('checkpoints/model_best_copy.pth', model)
 
 if (torch.cuda.device_count() > 1):
         device_ids = list(range(torch.cuda.device_count()))
