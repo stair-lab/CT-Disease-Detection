@@ -2,6 +2,7 @@ import os
 import numpy as np
 import torch
 import torch.optim as optim
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -9,13 +10,14 @@ from torchvision import transforms
 from time import time
 from argparse import ArgumentParser
 from sklearn.metrics import roc_auc_score
+from sklearn.preprocessing import label_binarize
 
 from dataset import ClassifierDataset
 from model.resnet34 import ResNet34
 #from model.fastai_resnet import resnet34
 #from model.coord_conv_resnet import resnet34
 from model.cc_resnet import resnet34
-from utils.loss import *
+# from utils.loss import *
 from utils.checkpoints import *
 from utils.metric import auroc_score
 from tqdm import tqdm
@@ -23,8 +25,13 @@ from tqdm import tqdm
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 # conditions = ['gender', 'HCC18', 'HCC22', 'HCC40', 'HCC48', 'HCC59', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'HCC138', 'age MSE', 'raf MSE', 'BMI MSE','A1C MSE']
 #conditions = ['gender', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'age MSE', 'raf MSE']
-conditions = ['GENDER', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'CTBiomarkers.CalciumScoring.AbdominalAgatston_y', 'AGE', 'RAF']
-num_classes = len(conditions) - 2
+conditions = ['GENDER', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'CalciumScoring_AbdominalAgatston', 'AGE', 'RAF']
+# num_classes = len(conditions) - 2
+
+# Assuming CalciumScoring has multiple classes (e.g., 4 classes)
+calcium_classes = 4  # Define the number of classes for CalciumScoring
+num_binary_classes = 7  # Number of binary classification tasks
+num_classes = num_binary_classes + calcium_classes - 1  # Adjust for multiclass task
 
 def arg_parse():
     parser = ArgumentParser()
@@ -43,23 +50,57 @@ def arg_parse():
     args = parser.parse_args()
     return args
 
+def multilabel_regression_loss(y_pred, y_true):
+    # Binary classification loss for first 7 tasks
+    binary_loss = F.binary_cross_entropy_with_logits(y_pred[:,:7], y_true[:,:7])
+    
+    # Multiclass classification loss for calcium scoring
+    calcium_pred = y_pred[:,7:7+calcium_classes]
+    calcium_true = y_true[:,7:7+calcium_classes]
+    calcium_loss = F.cross_entropy(calcium_pred, torch.argmax(calcium_true, dim=1))
+    
+    # Regression loss for age and RAF
+    age_loss = F.mse_loss(y_pred[:,-2], y_true[:,-2])
+    raf_loss = F.mse_loss(y_pred[:,-1], y_true[:,-1])
+    
+    # Combine losses
+    total_loss = binary_loss + calcium_loss + age_loss + raf_loss
+    return total_loss
+
+
+
 def calculate_accuracy(y_pred, y_label, threshold=0.5):
-    pred_conditions = y_pred[:,:-2]
-    label_conditions = y_label[:,:-2]
+    # Handle binary classification tasks
+    pred_binary = y_pred[:,:7]
+    label_binary = y_label[:,:7]
+    
+    # Handle calcium scoring as multiclass
+    pred_calcium = y_pred[:,7:7+calcium_classes]
+    label_calcium_idx = torch.argmax(y_label[:,7:7+calcium_classes], dim=1)
+    
+    # Handle regression tasks
     pred_age = y_pred[:,-2]
     label_age = y_label[:,-2]
     pred_raf = y_pred[:,-1]
     label_raf = y_label[:,-1]
+    
     loss = nn.MSELoss()
-    batch, _ = label_conditions.shape
+    batch, _ = label_binary.shape
 
     correct = torch.zeros(num_classes + 2)
     one = torch.ones(1).to(device)
     zero = torch.zeros(1).to(device)
-    for i in range(num_classes):
-        pred_labels = torch.where(pred_conditions[:, i] > threshold, one, zero)
-        correct[i] = (pred_labels == label_conditions[:, i]).sum()
-
+    
+    # Calculate accuracy for binary tasks
+    for i in range(7):
+        pred_labels = torch.where(pred_binary[:, i] > threshold, one, zero)
+        correct[i] = (pred_labels == label_binary[:, i]).sum()
+    
+    # Calculate accuracy for calcium scoring (multiclass)
+    pred_calcium_idx = torch.argmax(pred_calcium, dim=1)
+    correct[7:7+calcium_classes-1] = (pred_calcium_idx == label_calcium_idx).sum()
+    
+    # Calculate MSE for regression tasks
     correct[-2] = loss(pred_age, label_age)
     correct[-1] = loss(pred_raf, label_raf)
 
@@ -78,14 +119,29 @@ def calculate_accuracy(y_pred, y_label, threshold=0.5):
 
 def print_accuracy(train_accuracy, test_accuracy, train_auroc, test_auroc):
     print('\t\tTrain accuracy:\tTest accuracy:\tTrain AUROC:\tTest AUROC:')
-    for i, (train_acc, test_acc, train_au, test_au) in enumerate(zip(train_accuracy, test_accuracy, train_auroc, test_auroc)):
-        print('{}\t:\t{:.4f}%\t{:.4f}%\t{:.4f}\t\t{:.4f}'.format(conditions[i], train_acc*100, test_acc*100, train_au, test_au))
+    # Print binary classification results
+    for i in range(7):
+        print('{}\t:\t{:.4f}%\t{:.4f}%\t{:.4f}\t\t{:.4f}'.format(
+            conditions[i], train_accuracy[i]*100, test_accuracy[i]*100, train_auroc[i], test_auroc[i]))
+    
+    # Print multiclass classification result
+    print('{}\t:\t{:.4f}%\t{:.4f}%'.format(
+        conditions[7], train_accuracy[7]*100, test_accuracy[7]*100))
+    
+    # Print regression results
     print('{}\t:\t{:.4f}\t\t{:.4f}'.format(conditions[-2], train_accuracy[-2], test_accuracy[-2]))
     print('{}\t:\t{:.4f}\t\t{:.4f}'.format(conditions[-1], train_accuracy[-1], test_accuracy[-1]))
 
+
 def print_auroc(train_auroc, test_auroc):
-    for i in range(num_classes):
+    # Print binary classification tasks
+    for i in range(7):
         print('{}\t: {:.4f}\t\t{:.4f}'.format(conditions[i], train_auroc[i], test_auroc[i]))
+    
+    # Print multiclass calcium scoring
+    print('{}\t: {:.4f}\t\t{:.4f}'.format(
+        conditions[7], train_auroc[7], test_auroc[7]))
+
 
 def train_epoch(model, dataloader, optimizer):
     tot_loss = 0
@@ -140,8 +196,12 @@ def train(model, train_dataloader, test_dataloader, optimizer, scheduler, epochs
         print_accuracy(train_accuracy, test_accuracy, train_class_auroc, test_class_auroc)
 
         print('AUROC Score:')
-        for i in range(num_classes):
-            print('{}: {:.4f}'.format(conditions[i], test_class_auroc[i]))
+        for i in range(len(test_class_auroc)):  # Use length of test_class_auroc instead of num_classes
+            if i < num_binary_classes:
+                print('{}: {:.4f}'.format(conditions[i], test_class_auroc[i]))
+            else:
+                print('{}: {:.4f}'.format(conditions[7], test_class_auroc[i]))
+
 
         train_state = {'epoch'      : epoch + 1,
                        'state_dict' : model.state_dict(),
@@ -157,31 +217,56 @@ def test(model, test_dataloader):
     tot_loss = 0
     accuracy = torch.zeros(num_classes+2, dtype=torch.float32)
     tot_score = 0
-    class_score = torch.zeros(num_classes)
+    class_score = torch.zeros(num_binary_classes + 1)  # +1 for multiclass task
 
     model.eval()
     with torch.no_grad():
-        y_true = torch.LongTensor()
-        y_pred = torch.FloatTensor()
+        y_true_binary = torch.LongTensor()
+        y_pred_binary = torch.FloatTensor()
+        y_true_calcium = torch.LongTensor()
+        y_pred_calcium = torch.FloatTensor()
+        
         for i, (img, labels) in enumerate(test_dataloader):
             img = img.to(device)
             labels = labels.to(device)
             img = img.repeat(1, 3, 1, 1)
-
+            
             prediction = torch.sigmoid(model(img))
-            y_true = torch.cat((y_true, labels[:, :-2].to('cpu')), dim=0)
-            y_pred = torch.cat([y_pred, prediction[:, :-2].to('cpu')], dim=0)
-
+            
+            # Collect binary predictions
+            y_true_binary = torch.cat((y_true_binary, labels[:, :7].to('cpu')), dim=0)
+            y_pred_binary = torch.cat([y_pred_binary, prediction[:, :7].to('cpu')], dim=0)
+            
+            # Collect calcium predictions
+            y_true_calcium = torch.cat((y_true_calcium, torch.argmax(labels[:, 7:7+calcium_classes], dim=1).to('cpu')), dim=0)
+            y_pred_calcium = torch.cat([y_pred_calcium, prediction[:, 7:7+calcium_classes].to('cpu')], dim=0)
+            
             del img, labels, prediction
 
-    for j in range(num_classes):
+    # Calculate AUROC for binary tasks
+    for j in range(num_binary_classes):
         try:
-            s = roc_auc_score(y_true[:, j], y_pred[:, j])
+            s = roc_auc_score(y_true_binary[:, j], y_pred_binary[:, j])
         except ValueError:
             s = 0
         class_score[j] = s
+    
+    # Calculate AUROC for multiclass calcium scoring
+    try:
+        # Convert to one-hot encoding for multiclass ROC AUC
+        from sklearn.preprocessing import label_binarize
+        # One-hot encode the true labels
+        y_true_calcium_one_hot = label_binarize(y_true_calcium, classes=range(calcium_classes))
+        # Ensure prediction probabilities are properly formatted
+        s = roc_auc_score(y_true_calcium_one_hot, y_pred_calcium, multi_class='ovr', average='macro')
+    except ValueError as e:
+        print(f"Error calculating calcium AUROC: {e}")
+        s = 0
+    class_score[num_binary_classes] = s
+
 
     return tot_loss/(i+1), accuracy, 100 * tot_score/(i + 1), class_score
+
 
 args = arg_parse()
 print('Parameters:\n\
@@ -233,7 +318,7 @@ else:
     #model = resnet34(pretrained=False, num_classes=num_classes+2).to(device)'''
 
 model = ResNet34(num_classes=num_classes+2)
-# load_checkpoint('checkpoints/model_best_copy.pth', model)
+load_checkpoint('/lfs/turing1/0/mahmedc/CT-Disease-Detection/chexpert_ckpt/chexpert_resnet_ckpt/best.pth', model)
 
 if (torch.cuda.device_count() > 1):
         device_ids = list(range(torch.cuda.device_count()))
