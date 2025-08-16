@@ -32,7 +32,10 @@ class ClassifierDataset(Dataset):
         csv_name = 'train1.csv' if train else 'test1.csv'
         self.df = pd.read_csv(os.path.join(data_path, csv_name))
         self.df['RAF'] = 0
-        self.df['CTBiomarkers.CalciumScoring.AbdominalAgatston_y'] = self.df['CTBiomarkers.CalciumScoring.AbdominalAgatston_y'].apply(lambda x: 'PRESENT' if x > 99 else 'ABSENT')
+        self.df['CalciumScoring_AbdominalAgatston'] = self.df['CalciumScoring_AbdominalAgatston'].apply(
+            lambda x: 'PRESENT' if x in ['MEDIUM', 'HIGH'] else 'ABSENT'
+        )
+
         self.transforms = transforms
         print(self.conditions)
 
