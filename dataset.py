@@ -39,10 +39,10 @@ class ClassifierDataset(Dataset):
         # Map calcium scoring values to class indices instead of binary
         # Assuming classes are: NONE, LOW, MEDIUM, HIGH (0-3)
         self.calcium_mapping = {
-            'ABSENT': 0,
+            'ABSENT': 1,
             'LOW': 1,
-            'MEDIUM': 2,
-            'HIGH': 3
+            'MEDIUM': 0,
+            'HIGH': 0
         }
         
         self.transforms = transforms
