@@ -1,0 +1,39 @@
+================================================================================
+PNG FILENAME STANDARDIZATION REPORT
+================================================================================
+Generated: 2025-09-04 04:53:30
+Directory: /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data/data
+
+VALIDATION RESULTS
+----------------------------------------
+Total files processed:     53,361
+Unique standard names:     53,357
+Conflicts detected:        4
+Validation status:         FAILED
+
+CONVERSION BREAKDOWN
+----------------------------------------
+schema_2_no_change        27,249 (51.07%)
+schema_1_to_2             25,515 (47.82%)
+schema_3_to_2_10digit     556 (1.04%)
+schema_3_to_2_11digit     40 (0.07%)
+special_suffix_kept       1 (0.00%)
+
+FILENAME CONFLICTS
+----------------------------------------
+Standard name: 070909-0275.png
+Conflicting files: 070909-0275.png, 070909_0275.png
+
+Standard name: 082520-3028.png
+Conflicting files: 082520_3028.png, 082520-3028.png
+
+Standard name: 062308-0214.png
+Conflicting files: 062308-0214.png, 062308_0214.png
+
+Standard name: 122011-0421.png
+Conflicting files: 122011-0421.png, 122011_0421.png
+
+RECOMMENDATIONS
+----------------------------------------
+⚠️  Manual resolution needed for conflicts.
+   Review conflicting files and resolve duplicates.
