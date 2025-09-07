@@ -1,0 +1,71 @@
+{
+  "binary_biomarkers": [
+    {
+      "name": "HCC18",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.0
+    },
+    {
+      "name": "HCC22",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.0
+    },
+    {
+      "name": "HCC85",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.0
+    },
+    {
+      "name": "HCC96",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.0
+    },
+    {
+      "name": "HCC108",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.0
+    },
+    {
+      "name": "HCC111",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.0
+    }
+  ],
+  "multiclass_biomarkers": [
+    {
+      "name": "CalciumScoring_AbdominalAgatston",
+      "classes": [
+        "ABSENT",
+        "LOW",
+        "MEDIUM",
+        "HIGH"
+      ],
+      "class_weights": {
+        "ABSENT": 1.0,
+        "LOW": 1.0,
+        "MEDIUM": 1.0,
+        "HIGH": 1.0
+      }
+    }
+  ],
+  "continuous_biomarkers": [
+    {
+      "name": "AGE",
+      "normalization_factor": 101.0,
+      "min_value": null,
+      "max_value": null
+    },
+    {
+      "name": "RAF",
+      "normalization_factor": 50.0,
+      "min_value": null,
+      "max_value": null
+    }
+  ]
+}

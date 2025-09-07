@@ -1,0 +1,72 @@
+{
+  "binary_biomarkers": [
+    {
+      "name": "HCC18",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 2.0
+    },
+    {
+      "name": "HCC22",
+      "positive_class": "PRESENT",
+      "negative_class": "ABSENT",
+      "class_weight": 1.5
+    },
+    {
+      "name": "Diabetes",
+      "positive_class": "YES",
+      "negative_class": "NO",
+      "class_weight": 1.0
+    }
+  ],
+  "multiclass_biomarkers": [
+    {
+      "name": "Severity",
+      "classes": [
+        "MILD",
+        "MODERATE",
+        "SEVERE"
+      ],
+      "class_weights": {
+        "MILD": 1.0,
+        "MODERATE": 1.5,
+        "SEVERE": 2.0
+      }
+    },
+    {
+      "name": "Stage",
+      "classes": [
+        "I",
+        "II",
+        "III",
+        "IV"
+      ],
+      "class_weights": {
+        "I": 1.0,
+        "II": 1.0,
+        "III": 1.0,
+        "IV": 1.0
+      }
+    }
+  ],
+  "continuous_biomarkers": [
+    {
+      "name": "AGE",
+      "normalization_factor": 100.0,
+      "min_value": 0,
+      "max_value": 120
+    },
+    {
+      "name": "BMI",
+      "normalization_factor": 50.0,
+      "min_value": 10,
+      "max_value": 60
+    },
+    {
+      "name": "BloodPressure",
+      "normalization_factor": 200.0,
+      "min_value": null,
+      "max_value": null
+    }
+  ]
+}

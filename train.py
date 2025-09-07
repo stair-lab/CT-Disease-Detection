@@ -1,336 +1,909 @@
+"""
+Enhanced Training Pipeline for Multi-Task Comorbidity Detection
+Includes tensorboard logging, validation passes, and comprehensive checkpointing
+"""
+
 import os
 import numpy as np
 import torch
 import torch.optim as optim
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
-# from torchsampler import ImbalancedDatasetSampler
-from time import time
-from argparse import ArgumentParser
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, f1_score, precision_recall_curve
+from sklearn.utils.class_weight import compute_class_weight
 from sklearn.preprocessing import label_binarize
-
-from dataset import ClassifierDataset
-from model.resnet34 import ResNet34
-#from model.fastai_resnet import resnet34
-#from model.coord_conv_resnet import resnet34
-from model.cc_resnet import resnet34
-# from utils.loss import *
-from utils.checkpoints import *
-from utils.metric import auroc_score
+import pandas as pd
 from tqdm import tqdm
+import json
+import time
+from argparse import ArgumentParser
+from typing import Dict, List, Tuple, Any
 
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-# conditions = ['gender', 'HCC18', 'HCC22', 'HCC40', 'HCC48', 'HCC59', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'HCC138', 'age MSE', 'raf MSE', 'BMI MSE','A1C MSE']
-#conditions = ['gender', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'age MSE', 'raf MSE']
-conditions = ['GENDER', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 'CalciumScoring_AbdominalAgatston', 'AGE', 'RAF']
-# num_classes = len(conditions) - 2
+# Import our custom modules
+from dataset import ClassifierDataset
+from model.model_factory import ModelFactory
+from config.experiment_config import (
+    ExperimentConfigLoader, ExperimentConfig, 
+    parse_augmentation_string, create_optimizer, create_scheduler
+)
+from config.biomarker_config import BiomarkerConfig, get_default_biomarker_config
+from utils.checkpoints import save_checkpoint, load_checkpoint
 
-# Assuming CalciumScoring has multiple classes (e.g., 4 classes)
-calcium_classes = 4  # Define the number of classes for CalciumScoring
-num_binary_classes = 7  # Number of binary classification tasks
-num_classes = num_binary_classes + calcium_classes - 1  # Adjust for multiclass task
+# Set device
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
 
-def arg_parse():
-    parser = ArgumentParser()
-    parser.add_argument('--data_dir', default='data', help='Directory with data')
-    parser.add_argument('--checkpoint_dir', default='checkpoints', help='Checkpoint output directory')
-    parser.add_argument('--pretrain', default=None, help='Path to pretrained weights')
-    parser.add_argument('--size', default=256, type=int, help="Size of CT to generate")
-    parser.add_argument('--age_norm', default=101.0, type=float, help="Normalization of age")
-    parser.add_argument('--raf_norm', default=50.0, type=float, help="Normalization of RAF")
-    parser.add_argument('--lr', default=1e-3, type=float, help="Learning rate")
-    parser.add_argument('--epochs', default=1000, type=int, help="Number of epochs")
-    parser.add_argument('--train_batch_size', default=64, type=int, help="Training batch size")
-    parser.add_argument('--test_batch_size', default=64, type=int, help="Testing batch size")
-    parser.add_argument('--num_workers', default=32, type=int, help="Number of workers used")
-    parser.add_argument('--decay_start_epoch', default=15, type=int, help="Epoch to start learning rate decay")
-    args = parser.parse_args()
-    return args
+# Define conditions (biomarkers)
+CONDITIONS = ['GENDER', 'HCC18', 'HCC22', 'HCC85', 'HCC96', 'HCC108', 'HCC111', 
+             'CalciumScoring_AbdominalAgatston', 'AGE', 'RAF']
+BINARY_CONDITIONS = CONDITIONS[1:8]  # HCC conditions
+CALCIUM_CLASSES = 4
+NUM_BINARY_TASKS = 7
+NUM_REGRESSION_TASKS = 2
 
-def multilabel_regression_loss(y_pred, y_true):
-    # Binary classification loss for first 7 tasks
-    binary_loss = F.binary_cross_entropy_with_logits(y_pred[:,:7], y_true[:,:7])
+
+class MultiTaskLoss(nn.Module):
+    """Multi-task loss function for comorbidity detection"""
     
-    # Multiclass classification loss for calcium scoring
-    calcium_pred = y_pred[:,7:7+calcium_classes]
-    calcium_true = y_true[:,7:7+calcium_classes]
-    calcium_loss = F.cross_entropy(calcium_pred, torch.argmax(calcium_true, dim=1))
+    def __init__(self, class_weights=None, calcium_classes=4):
+        super().__init__()
+        self.class_weights = class_weights
+        self.calcium_classes = calcium_classes
+        
+        # Create weighted BCE loss if class weights provided
+        if class_weights is not None:
+            # Convert to tensor and move to device
+            if isinstance(class_weights, dict):
+                # Assume class_weights is per binary task
+                self.binary_weights = torch.tensor([class_weights.get(i, 1.0) for i in range(NUM_BINARY_TASKS)], 
+                                                 dtype=torch.float32).to(device)
+            else:
+                self.binary_weights = torch.tensor(class_weights[:NUM_BINARY_TASKS], 
+                                                 dtype=torch.float32).to(device)
+        else:
+            self.binary_weights = None
     
-    # Regression loss for age and RAF
-    age_loss = F.mse_loss(y_pred[:,-2], y_true[:,-2])
-    raf_loss = F.mse_loss(y_pred[:,-1], y_true[:,-1])
+    def forward(self, predictions, targets):
+        """
+        Calculate multi-task loss
+        
+        Args:
+            predictions: [batch_size, 13] - 7 binary + 4 calcium + 2 regression
+            targets: [batch_size, 13] - same format
+        """
+        batch_size = predictions.size(0)
+        
+        # Split predictions and targets
+        binary_pred = predictions[:, :NUM_BINARY_TASKS]  # [B, 7]
+        calcium_pred = predictions[:, NUM_BINARY_TASKS:NUM_BINARY_TASKS+CALCIUM_CLASSES]  # [B, 4]
+        regression_pred = predictions[:, -NUM_REGRESSION_TASKS:]  # [B, 2]
+        
+        binary_target = targets[:, :NUM_BINARY_TASKS]  # [B, 7]
+        calcium_target = targets[:, NUM_BINARY_TASKS:NUM_BINARY_TASKS+CALCIUM_CLASSES]  # [B, 4]
+        regression_target = targets[:, -NUM_REGRESSION_TASKS:]  # [B, 2]
+        
+        # Binary classification loss (BCE with logits)
+        if self.binary_weights is not None:
+            # Apply class weights
+            binary_loss = 0
+            for i in range(NUM_BINARY_TASKS):
+                weight = self.binary_weights[i]
+                loss_i = F.binary_cross_entropy_with_logits(
+                    binary_pred[:, i], binary_target[:, i], 
+                    pos_weight=weight.unsqueeze(0).expand(batch_size)
+                )
+                binary_loss += loss_i
+            binary_loss /= NUM_BINARY_TASKS
+        else:
+            binary_loss = F.binary_cross_entropy_with_logits(binary_pred, binary_target)
+        
+        # Multiclass classification loss (Cross-entropy)
+        calcium_target_idx = torch.argmax(calcium_target, dim=1)
+        calcium_loss = F.cross_entropy(calcium_pred, calcium_target_idx)
+        
+        # Regression loss (MSE)
+        regression_loss = F.mse_loss(regression_pred, regression_target)
+        
+        # Combine losses with equal weighting (can be made configurable)
+        total_loss = binary_loss + calcium_loss + regression_loss
+        
+        return total_loss, {
+            'binary_loss': binary_loss.item(),
+            'calcium_loss': calcium_loss.item(),
+            'regression_loss': regression_loss.item(),
+            'total_loss': total_loss.item()
+        }
+
+
+class MetricsCalculator:
+    """Calculate comprehensive metrics for multi-task learning"""
     
-    # Combine losses
-    total_loss = binary_loss + calcium_loss + age_loss + raf_loss
-    return total_loss
-
-
-
-def calculate_accuracy(y_pred, y_label, threshold=0.5):
-    # Handle binary classification tasks
-    pred_binary = y_pred[:,:7]
-    label_binary = y_label[:,:7]
+    def __init__(self, biomarker_config: BiomarkerConfig):
+        self.biomarker_config = biomarker_config
+        self.tensor_layout = biomarker_config.get_tensor_layout()
+        self.binary_biomarkers = [b.name for b in biomarker_config.binary_biomarkers]
+        self.multiclass_biomarkers = [b.name for b in biomarker_config.multiclass_biomarkers]
+        self.continuous_biomarkers = [b.name for b in biomarker_config.continuous_biomarkers]
+        
+    def calculate_binary_metrics(self, predictions, targets, threshold=0.5):
+        """Calculate metrics for binary classification tasks"""
+        metrics = {}
+        
+        # Convert to numpy if needed
+        if isinstance(predictions, torch.Tensor):
+            predictions = predictions.cpu().numpy()
+        if isinstance(targets, torch.Tensor):
+            targets = targets.cpu().numpy()
+        
+        for biomarker_name in self.binary_biomarkers:
+            layout = self.tensor_layout[biomarker_name]
+            idx = layout['start_idx']
+            
+            pred_probs = predictions[:, idx]
+            true_labels = targets[:, idx].astype(int)
+            
+            # AUROC
+            try:
+                auroc = roc_auc_score(true_labels, pred_probs)
+            except ValueError:
+                auroc = 0.0
+            
+            # Predictions with threshold
+            pred_labels = (pred_probs > threshold).astype(int)
+            
+            # Accuracy
+            accuracy = (pred_labels == true_labels).mean()
+            
+            # Calculate confusion matrix components
+            true_positives = np.sum((pred_labels == 1) & (true_labels == 1))
+            true_negatives = np.sum((pred_labels == 0) & (true_labels == 0))
+            false_positives = np.sum((pred_labels == 1) & (true_labels == 0))
+            false_negatives = np.sum((pred_labels == 0) & (true_labels == 1))
+            
+            # Sensitivity (Recall/True Positive Rate)
+            sensitivity = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+            
+            # Specificity (True Negative Rate)
+            specificity = true_negatives / (true_negatives + false_positives) if (true_negatives + false_positives) > 0 else 0.0
+            
+            # F1 Score
+            try:
+                f1 = f1_score(true_labels, pred_labels, zero_division=0.0)
+            except (ValueError, ZeroDivisionError):
+                f1 = 0.0
+            
+            # Find optimal F1 threshold
+            try:
+                precision, recall, thresholds = precision_recall_curve(true_labels, pred_probs)
+                f1_scores = 2 * (precision * recall) / (precision + recall + 1e-8)
+                optimal_idx = np.argmax(f1_scores)
+                optimal_f1 = f1_scores[optimal_idx]
+                optimal_threshold = thresholds[optimal_idx] if optimal_idx < len(thresholds) else threshold
+            except (ValueError, IndexError):
+                optimal_f1 = f1
+                optimal_threshold = threshold
+            
+            metrics[biomarker_name] = {
+                'auroc': auroc,
+                'accuracy': accuracy,
+                'sensitivity': sensitivity,
+                'specificity': specificity,
+                'f1': f1,
+                'optimal_f1': optimal_f1,
+                'optimal_threshold': optimal_threshold,
+                'true_positives': int(true_positives),
+                'true_negatives': int(true_negatives),
+                'false_positives': int(false_positives),
+                'false_negatives': int(false_negatives)
+            }
+        
+        return metrics
     
-    # Handle calcium scoring as multiclass
-    pred_calcium = y_pred[:,7:7+calcium_classes]
-    label_calcium_idx = torch.argmax(y_label[:,7:7+calcium_classes], dim=1)
+    def calculate_calcium_metrics(self, predictions, targets):
+        """Calculate metrics for calcium scoring (multiclass)"""
+        # Convert to numpy if needed
+        if isinstance(predictions, torch.Tensor):
+            predictions = predictions.cpu().numpy()
+        if isinstance(targets, torch.Tensor):
+            targets = targets.cpu().numpy()
+        
+        # Get predicted classes
+        pred_classes = np.argmax(predictions, axis=1)
+        true_classes = np.argmax(targets, axis=1)
+        
+        # Overall accuracy
+        accuracy = (pred_classes == true_classes).mean()
+        
+        # Multi-class AUROC
+        try:
+            auroc = roc_auc_score(targets, predictions, multi_class='ovr', average='macro')
+        except ValueError:
+            auroc = 0.0
+        
+        # Per-class sensitivity and specificity
+        num_classes = predictions.shape[1]
+        class_names = ['ABSENT', 'LOW', 'MEDIUM', 'HIGH']
+        per_class_metrics = {}
+        
+        for class_idx in range(num_classes):
+            # Convert to binary classification for this class vs all others
+            true_binary = (true_classes == class_idx).astype(int)
+            pred_binary = (pred_classes == class_idx).astype(int)
+            
+            # Calculate confusion matrix components
+            true_positives = np.sum((pred_binary == 1) & (true_binary == 1))
+            true_negatives = np.sum((pred_binary == 0) & (true_binary == 0))
+            false_positives = np.sum((pred_binary == 1) & (true_binary == 0))
+            false_negatives = np.sum((pred_binary == 0) & (true_binary == 1))
+            
+            # Sensitivity and Specificity
+            sensitivity = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+            specificity = true_negatives / (true_negatives + false_positives) if (true_negatives + false_positives) > 0 else 0.0
+            
+            per_class_metrics[f'calcium_{class_names[class_idx].lower()}'] = {
+                'sensitivity': sensitivity,
+                'specificity': specificity,
+                'true_positives': int(true_positives),
+                'true_negatives': int(true_negatives),
+                'false_positives': int(false_positives),
+                'false_negatives': int(false_negatives)
+            }
+        
+        return {
+            'CalciumScoring_AbdominalAgatston': {
+                'accuracy': accuracy,
+                'auroc': auroc,
+                'per_class': per_class_metrics
+            }
+        }
     
-    # Handle regression tasks
-    pred_age = y_pred[:,-2]
-    label_age = y_label[:,-2]
-    pred_raf = y_pred[:,-1]
-    label_raf = y_label[:,-1]
+    def calculate_regression_metrics(self, predictions, targets, age_norm=101.0, raf_norm=50.0):
+        """Calculate metrics for regression tasks"""
+        # Convert to numpy if needed
+        if isinstance(predictions, torch.Tensor):
+            predictions = predictions.cpu().numpy()
+        if isinstance(targets, torch.Tensor):
+            targets = targets.cpu().numpy()
+        
+        # Denormalize predictions and targets
+        age_pred = predictions[:, 0] * age_norm
+        age_true = targets[:, 0] * age_norm
+        raf_pred = predictions[:, 1] * raf_norm
+        raf_true = targets[:, 1] * raf_norm
+        
+        # Calculate MSE and MAE
+        age_mse = np.mean((age_pred - age_true) ** 2)
+        age_mae = np.mean(np.abs(age_pred - age_true))
+        raf_mse = np.mean((raf_pred - raf_true) ** 2)
+        raf_mae = np.mean(np.abs(raf_pred - raf_true))
+        
+        return {
+            'AGE': {
+                'mse': age_mse,
+                'mae': age_mae
+            },
+            'RAF': {
+                'mse': raf_mse,
+                'mae': raf_mae
+            }
+        }
     
-    loss = nn.MSELoss()
-    batch, _ = label_binary.shape
+    def calculate_all_metrics(self, predictions, targets):
+        """Calculate all metrics"""
+        all_metrics = {}
+        
+        # Calculate binary metrics
+        if self.binary_biomarkers:
+            binary_metrics = self.calculate_binary_metrics(predictions, targets)
+            all_metrics.update(binary_metrics)
+        
+        # Calculate multiclass metrics
+        for biomarker_name in self.multiclass_biomarkers:
+            layout = self.tensor_layout[biomarker_name]
+            start_idx = layout['start_idx']
+            end_idx = layout['end_idx']
+            
+            multiclass_pred = predictions[:, start_idx:end_idx]
+            multiclass_target = targets[:, start_idx:end_idx]
+            
+            multiclass_metrics = self.calculate_calcium_metrics(multiclass_pred, multiclass_target)
+            # Rename the key to the actual biomarker name
+            if 'CalciumScoring_AbdominalAgatston' in multiclass_metrics:
+                all_metrics[biomarker_name] = multiclass_metrics['CalciumScoring_AbdominalAgatston']
+        
+        # Calculate regression metrics  
+        if self.continuous_biomarkers:
+            regression_metrics = self.calculate_regression_metrics(predictions, targets)
+            all_metrics.update(regression_metrics)
+        
+        # Calculate average AUROC for model selection
+        auroc_values = []
+        
+        # Collect AUROC from binary biomarkers
+        for biomarker_name in self.binary_biomarkers:
+            if biomarker_name in all_metrics and 'auroc' in all_metrics[biomarker_name]:
+                auroc_values.append(all_metrics[biomarker_name]['auroc'])
+        
+        # Collect AUROC from multiclass biomarkers
+        for biomarker_name in self.multiclass_biomarkers:
+            if biomarker_name in all_metrics and 'auroc' in all_metrics[biomarker_name]:
+                auroc_values.append(all_metrics[biomarker_name]['auroc'])
+        
+        avg_auroc = np.mean(auroc_values) if auroc_values else 0.0
+        all_metrics['average_auroc'] = avg_auroc
+        
+        return all_metrics
 
-    correct = torch.zeros(num_classes + 2)
-    one = torch.ones(1).to(device)
-    zero = torch.zeros(1).to(device)
+
+def compute_class_weights_for_dataset(dataset, conditions):
+    """Compute class weights for balanced training"""
+    class_weights = {}
     
-    # Calculate accuracy for binary tasks
-    for i in range(7):
-        pred_labels = torch.where(pred_binary[:, i] > threshold, one, zero)
-        correct[i] = (pred_labels == label_binary[:, i]).sum()
+    # Get all labels
+    all_labels = []
+    for i in range(len(dataset)):
+        _, labels = dataset[i]
+        all_labels.append(labels.numpy())
     
-    # Calculate accuracy for calcium scoring (multiclass)
-    pred_calcium_idx = torch.argmax(pred_calcium, dim=1)
-    correct[7:7+calcium_classes-1] = (pred_calcium_idx == label_calcium_idx).sum()
+    all_labels = np.array(all_labels)
     
-    # Calculate MSE for regression tasks
-    correct[-2] = loss(pred_age, label_age)
-    correct[-1] = loss(pred_raf, label_raf)
-
-    return correct
-
-# def print_accuracy(accuracy):
-#     for i, acc in enumerate(accuracy):
-#         print('{}: {:.4f}%'.format(conditions[i], acc*100))
-
-# def print_accuracy(train_accuracy, test_accuracy):
-#     for i, (train_acc, test_acc) in enumerate(zip(train_accuracy, test_accuracy)):
-#         if i > 10:
-#             print('{}\t: {:.4f}\t\t\t{:.4f}'.format(conditions[i], train_acc, test_acc))
-#         else:
-#             print('{}\t: {:.4f}%\t\t\t{:.4f}%'.format(conditions[i], train_acc*100, test_acc*100))
-
-def print_accuracy(train_accuracy, test_accuracy, train_auroc, test_auroc):
-    print('\t\tTrain accuracy:\tTest accuracy:\tTrain AUROC:\tTest AUROC:')
-    # Print binary classification results
-    for i in range(7):
-        print('{}\t:\t{:.4f}%\t{:.4f}%\t{:.4f}\t\t{:.4f}'.format(
-            conditions[i], train_accuracy[i]*100, test_accuracy[i]*100, train_auroc[i], test_auroc[i]))
+    # Compute weights for binary tasks
+    for i, condition in enumerate(conditions[:NUM_BINARY_TASKS]):
+        labels = all_labels[:, i]
+        unique_classes = np.unique(labels)
+        if len(unique_classes) > 1:
+            weights = compute_class_weight('balanced', classes=unique_classes, y=labels)
+            # Use positive class weight for BCE
+            pos_weight = weights[1] / weights[0] if len(weights) > 1 else 1.0
+            class_weights[i] = pos_weight
+        else:
+            class_weights[i] = 1.0
     
-    # Print multiclass classification result
-    print('{}\t:\t{:.4f}%\t{:.4f}%'.format(
-        conditions[7], train_accuracy[7]*100, test_accuracy[7]*100))
+    return class_weights
+
+
+def create_data_transforms(config: ExperimentConfig, is_training=True):
+    """Create data transforms based on configuration"""
+    aug_params = parse_augmentation_string(config.image_augmentations)
     
-    # Print regression results
-    print('{}\t:\t{:.4f}\t\t{:.4f}'.format(conditions[-2], train_accuracy[-2], test_accuracy[-2]))
-    print('{}\t:\t{:.4f}\t\t{:.4f}'.format(conditions[-1], train_accuracy[-1], test_accuracy[-1]))
-
-
-def print_auroc(train_auroc, test_auroc):
-    # Print binary classification tasks
-    for i in range(7):
-        print('{}\t: {:.4f}\t\t{:.4f}'.format(conditions[i], train_auroc[i], test_auroc[i]))
+    if is_training:
+        transform_list = []
+        
+        # Add augmentations
+        if aug_params['horizontal_flip']:
+            transform_list.append(transforms.RandomHorizontalFlip(p=0.5))
+        
+        if aug_params['rotation'] > 0:
+            transform_list.append(transforms.RandomRotation(degrees=aug_params['rotation']))
+        
+        if aug_params['random_crop']:
+            transform_list.extend([
+                transforms.RandomResizedCrop(256, scale=(0.8, 1.0), ratio=(0.75, 1.33))
+            ])
+        
+        if aug_params['color_jitter']:
+            transform_list.append(
+                transforms.ColorJitter(
+                    brightness=aug_params['brightness'],
+                    contrast=aug_params['contrast']
+                )
+            )
+        
+        # Always add tensor conversion
+        transform_list.append(transforms.ToTensor())
+        
+        # Add normalization
+        if aug_params['imagenet_norm']:
+            # Use CT-specific normalization (from original code)
+            transform_list.append(transforms.Normalize((0.55001191,), (0.18854326,)))
+        
+        return transforms.Compose(transform_list)
     
-    # Print multiclass calcium scoring
-    print('{}\t: {:.4f}\t\t{:.4f}'.format(
-        conditions[7], train_auroc[7], test_auroc[7]))
+    else:
+        # Validation/test transforms (no augmentation)
+        transform_list = [transforms.ToTensor()]
+        
+        if aug_params['imagenet_norm']:
+            transform_list.append(transforms.Normalize((0.55001191,), (0.18854326,)))
+        
+        return transforms.Compose(transform_list)
 
 
-def train_epoch(model, dataloader, optimizer):
-    tot_loss = 0
-    accuracy = torch.zeros(num_classes+2, dtype=torch.float32)
-    tot_score = 0
-    class_score = torch.zeros(num_classes)
-    for i, (img, labels) in tqdm(enumerate(dataloader)):
-        img = img.to(device)
-        labels = labels.to(device)
-        img = img.repeat(1, 3, 1, 1)
+def create_balanced_sampler(dataset, conditions):
+    """Create balanced sampler for training"""
+    # Get all labels for binary tasks
+    all_labels = []
+    for i in range(len(dataset)):
+        _, labels = dataset[i]
+        # Use only binary labels for balancing
+        binary_labels = labels[:NUM_BINARY_TASKS].numpy()
+        all_labels.append(binary_labels)
+    
+    all_labels = np.array(all_labels)
+    
+    # Create sample weights based on inverse frequency
+    sample_weights = np.ones(len(dataset))
+    
+    for i in range(NUM_BINARY_TASKS):
+        labels = all_labels[:, i]
+        unique, counts = np.unique(labels, return_counts=True)
+        class_weights = len(labels) / (len(unique) * counts)
+        
+        for j, label in enumerate(labels):
+            sample_weights[j] *= class_weights[int(label)]
+    
+    return WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
 
-        prediction = torch.sigmoid(model(img))
-        isnan = torch.isnan(prediction[:, :-2]).any()
-        isinf = torch.isinf(prediction[:, :-2]).any()
-        if isnan or isinf:
-             print(f"NaN detected in predictions: {isnan}, Inf detected: {isinf}")
 
-        loss = multilabel_regression_loss(prediction, labels)
-        tot_loss += loss.item()
-
-        accuracy += calculate_accuracy(prediction, labels)
-
+def train_epoch(model, dataloader, criterion, optimizer, device, metrics_calc):
+    """Train for one epoch"""
+    model.train()
+    
+    total_loss = 0
+    all_predictions = []
+    all_targets = []
+    loss_components = {'binary_loss': 0, 'calcium_loss': 0, 'regression_loss': 0, 'total_loss': 0}
+    
+    for batch_idx, (images, targets) in enumerate(tqdm(dataloader, desc="Training")):
+        images = images.to(device)
+        targets = targets.to(device)
+        
+        # Convert single channel to 3-channel for models expecting RGB
+        if images.shape[1] == 1:
+            images = images.repeat(1, 3, 1, 1)
+        
+        # Forward pass
+        predictions = model(images)
+        
+        # Calculate loss
+        loss, loss_dict = criterion(predictions, targets)
+        
+        # Backward pass
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
-        del img, labels, prediction
-    accuracy /= len(dataloader.dataset)
-
-    return tot_loss/(i+1), accuracy, 100 * tot_score/(i + 1), 100 * class_score/(i + 1)
-
-def train(model, train_dataloader, test_dataloader, optimizer, scheduler, epochs):
-    best_loss = np.inf
-
-    for epoch in range(epochs):
-        model.train()
-        print(f'Epoch {epoch}')
-
-        start_train_time = time()
-        train_loss, train_accuracy, train_auroc, train_class_auroc = train_epoch(model, train_dataloader, optimizer)
-        scheduler.step(train_loss)
-        train_time = time() - start_train_time
-
-        start_test_time = time()
-        test_loss, test_accuracy, test_auroc, test_class_auroc = test(model, test_dataloader)
-        test_time = time() - start_test_time
-
-        print('Epoch: [{}/{}], Train loss: {:.4f}, Test loss: {:.4f}, Train score: {:.2f}, Test score: {:.2f} Train time: {:.2f}s, Test time: {:.2f}s'.format(epoch+1, epochs, train_loss, test_loss, train_auroc, test_auroc, train_time, test_time))
-        print('\t\tTrain AUROC:\tTest AUROC:')
-        print_auroc(train_class_auroc, test_class_auroc)
-        print('\t\t  Train accuracy:\tTest accuracy:')
-        print_accuracy(train_accuracy, test_accuracy, train_class_auroc, test_class_auroc)
-
-        print('AUROC Score:')
-        for i in range(len(test_class_auroc)):  # Use length of test_class_auroc instead of num_classes
-            if i < num_binary_classes:
-                print('{}: {:.4f}'.format(conditions[i], test_class_auroc[i]))
-            else:
-                print('{}: {:.4f}'.format(conditions[7], test_class_auroc[i]))
-
-
-        train_state = {'epoch'      : epoch + 1,
-                       'state_dict' : model.state_dict(),
-                       'optim_dict' : optimizer.state_dict()}
-        model_state = {'state_dict' : model.state_dict()}
-        is_best = test_loss < best_loss
-        if is_best:
-            best_loss = test_loss
-        save_checkpoint(train_state, model_state, is_best, args.checkpoint_dir)
-        print()
-
-def test(model, test_dataloader):
-    tot_loss = 0
-    accuracy = torch.zeros(num_classes+2, dtype=torch.float32)
-    tot_score = 0
-    class_score = torch.zeros(num_binary_classes + 1)  # +1 for multiclass task
-
-    model.eval()
-    with torch.no_grad():
-        y_true_binary = torch.LongTensor()
-        y_pred_binary = torch.FloatTensor()
-        y_true_calcium = torch.LongTensor()
-        y_pred_calcium = torch.FloatTensor()
         
-        for i, (img, labels) in enumerate(test_dataloader):
-            img = img.to(device)
-            labels = labels.to(device)
-            img = img.repeat(1, 3, 1, 1)
-            
-            prediction = torch.sigmoid(model(img))
-            
-            # Collect binary predictions
-            y_true_binary = torch.cat((y_true_binary, labels[:, :7].to('cpu')), dim=0)
-            y_pred_binary = torch.cat([y_pred_binary, prediction[:, :7].to('cpu')], dim=0)
-            
-            # Collect calcium predictions
-            y_true_calcium = torch.cat((y_true_calcium, torch.argmax(labels[:, 7:7+calcium_classes], dim=1).to('cpu')), dim=0)
-            y_pred_calcium = torch.cat([y_pred_calcium, prediction[:, 7:7+calcium_classes].to('cpu')], dim=0)
-            
-            del img, labels, prediction
-
-    # Calculate AUROC for binary tasks
-    for j in range(num_binary_classes):
-        try:
-            s = roc_auc_score(y_true_binary[:, j], y_pred_binary[:, j])
-        except ValueError:
-            s = 0
-        class_score[j] = s
+        # Accumulate metrics
+        total_loss += loss.item()
+        for key in loss_components:
+            loss_components[key] += loss_dict[key]
+        
+        # Store predictions and targets for metric calculation
+        all_predictions.append(torch.sigmoid(predictions).detach().cpu())
+        all_targets.append(targets.detach().cpu())
     
-    # Calculate AUROC for multiclass calcium scoring
-    try:
-        # Convert to one-hot encoding for multiclass ROC AUC
-        from sklearn.preprocessing import label_binarize
-        # One-hot encode the true labels
-        y_true_calcium_one_hot = label_binarize(y_true_calcium, classes=range(calcium_classes))
-        # Ensure prediction probabilities are properly formatted
-        s = roc_auc_score(y_true_calcium_one_hot, y_pred_calcium, multi_class='ovr', average='macro')
-    except ValueError as e:
-        print(f"Error calculating calcium AUROC: {e}")
-        s = 0
-    class_score[num_binary_classes] = s
+    # Calculate metrics
+    all_predictions = torch.cat(all_predictions, dim=0)
+    all_targets = torch.cat(all_targets, dim=0)
+    
+    metrics = metrics_calc.calculate_all_metrics(all_predictions, all_targets)
+    
+    # Average losses
+    avg_loss = total_loss / len(dataloader)
+    for key in loss_components:
+        loss_components[key] /= len(dataloader)
+    
+    return avg_loss, metrics, loss_components
 
 
-    return tot_loss/(i+1), accuracy, 100 * tot_score/(i + 1), class_score
+def validate_epoch(model, dataloader, criterion, device, metrics_calc):
+    """Validate for one epoch"""
+    model.eval()
+    
+    total_loss = 0
+    all_predictions = []
+    all_targets = []
+    loss_components = {'binary_loss': 0, 'calcium_loss': 0, 'regression_loss': 0, 'total_loss': 0}
+    
+    with torch.no_grad():
+        for batch_idx, (images, targets) in enumerate(tqdm(dataloader, desc="Validation")):
+            images = images.to(device)
+            targets = targets.to(device)
+            
+            # Convert single channel to 3-channel for models expecting RGB
+            if images.shape[1] == 1:
+                images = images.repeat(1, 3, 1, 1)
+            
+            # Forward pass
+            predictions = model(images)
+            
+            # Calculate loss
+            loss, loss_dict = criterion(predictions, targets)
+            
+            # Accumulate metrics
+            total_loss += loss.item()
+            for key in loss_components:
+                loss_components[key] += loss_dict[key]
+            
+            # Store predictions and targets for metric calculation
+            all_predictions.append(torch.sigmoid(predictions).detach().cpu())
+            all_targets.append(targets.detach().cpu())
+    
+    # Calculate metrics
+    all_predictions = torch.cat(all_predictions, dim=0)
+    all_targets = torch.cat(all_targets, dim=0)
+    
+    metrics = metrics_calc.calculate_all_metrics(all_predictions, all_targets)
+    
+    # Average losses
+    avg_loss = total_loss / len(dataloader)
+    for key in loss_components:
+        loss_components[key] /= len(dataloader)
+    
+    return avg_loss, metrics, loss_components
 
 
-args = arg_parse()
-print('Parameters:\n\
-       data directory: {}\n\
-       checkpoint directory: {}\n\
-       size: {}\n\
-       lr: {}\n\
-       epochs: {}\n\
-       train batch size: {}\n\
-       number of workers: {}\n\
-       epoch to start decay: {}\n'.format(args.data_dir,
-       args.checkpoint_dir, args.size, args.lr, args.epochs,
-       args.train_batch_size, args.num_workers,
-       args.decay_start_epoch))
+def train_model(config: ExperimentConfig, data_dir: str, output_dir: str, 
+                biomarker_config: BiomarkerConfig, epochs: int = 100):
+    """Main training function"""
+    
+    # Safety check: if directory exists and has important files, create a new one
+    if os.path.exists(output_dir):
+        important_files = ['best_checkpoint.pth', 'config.json', 'experiment_results.csv']
+        has_important_files = any(os.path.exists(os.path.join(output_dir, f)) for f in important_files)
+        
+        if has_important_files:
+            import datetime
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            original_output_dir = output_dir
+            output_dir = f"{output_dir}_{timestamp}"
+            print(f"⚠️  Output directory {original_output_dir} exists with important files.")
+            print(f"📁 Using new directory: {output_dir}")
+    
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Setup tensorboard logging
+    writer = SummaryWriter(log_dir=os.path.join(output_dir, 'tensorboard'))
+    
+    # Save configuration
+    with open(os.path.join(output_dir, 'config.json'), 'w') as f:
+        json.dump(config.to_dict(), f, indent=2)
+    
+    print(f"Starting experiment: {config.experiment_name}")
+    print(f"Model: {config.model}")
+    print(f"Output directory: {output_dir}")
+    print(f"Expected GPU memory: {config.expected_gpu_memory}")
+    
+    # Create data transforms
+    train_transform = create_data_transforms(config, is_training=True)
+    val_transform = create_data_transforms(config, is_training=False)
+    
+    # Load datasets
+    print("Loading datasets...")
+    train_dataset = ClassifierDataset(
+        data_dir, biomarker_config, transforms=train_transform, 
+        size=256, train=True
+    )
+    
+    val_dataset = ClassifierDataset(
+        data_dir, biomarker_config, transforms=val_transform,
+        size=256, train=False
+    )
+    
+    print(f"Train dataset size: {len(train_dataset)}")
+    print(f"Validation dataset size: {len(val_dataset)}")
+    
+    # Compute class weights if specified
+    class_weights = None
+    if config.class_weighting == 'inverse_frequency':
+        print("Computing class weights...")
+        class_weights = compute_class_weights_for_dataset(train_dataset, CONDITIONS)
+        print(f"Class weights: {class_weights}")
+    
+    # Create data loaders
+    if config.sampling_strategy == 'balanced_batch':
+        train_sampler = create_balanced_sampler(train_dataset, CONDITIONS)
+        train_loader = DataLoader(
+            train_dataset, batch_size=config.batch_size, 
+            sampler=train_sampler, num_workers=8, pin_memory=True
+        )
+    else:
+        train_loader = DataLoader(
+            train_dataset, batch_size=config.batch_size, 
+            shuffle=True, num_workers=8, pin_memory=True
+        )
+    
+    val_loader = DataLoader(
+        val_dataset, batch_size=config.batch_size, 
+        shuffle=False, num_workers=8, pin_memory=True
+    )
+    
+    # Create model
+    print("Creating model...")
+    model = ModelFactory.create_model(
+        architecture=config.model,
+        num_classes=biomarker_config.total_output_size,
+        pretrained_weights=config.pretrained_weights,
+        fine_tuning_strategy=config.fine_tuning_strategy,
+        dropout=config.dropout
+    )
+    
+    model = model.to(device)
+    
+    # Print model info
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    
+    # Create loss function
+    criterion = MultiTaskLoss(class_weights=class_weights, calcium_classes=CALCIUM_CLASSES)
+    
+    # Create optimizer and scheduler
+    optimizer = create_optimizer(model.parameters(), config)
+    scheduler = create_scheduler(optimizer, config, epochs)
+    
+    # Create metrics calculator
+    metrics_calc = MetricsCalculator(biomarker_config)
+    
+    # Training loop
+    best_avg_auroc = 0.0
+    best_epoch = 0
+    patience = 10
+    patience_counter = 0
+    
+    print(f"\nStarting training for {epochs} epochs with early stopping (patience: {patience})...")
+    
+    for epoch in range(epochs):
+        epoch_start_time = time.time()
+        
+        print(f"\nEpoch {epoch+1}/{epochs}")
+        
+        # Training phase
+        train_loss, train_metrics, train_loss_components = train_epoch(
+            model, train_loader, criterion, optimizer, device, metrics_calc
+        )
+        
+        # Validation phase
+        val_loss, val_metrics, val_loss_components = validate_epoch(
+            model, val_loader, criterion, device, metrics_calc
+        )
+        
+        # Update scheduler
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(val_loss)
+        else:
+            scheduler.step()
+        
+        epoch_time = time.time() - epoch_start_time
+        
+        # Log to tensorboard
+        writer.add_scalar('Loss/Train', train_loss, epoch)
+        writer.add_scalar('Loss/Validation', val_loss, epoch)
+        writer.add_scalar('Loss/Train_Binary', train_loss_components['binary_loss'], epoch)
+        writer.add_scalar('Loss/Train_Calcium', train_loss_components['calcium_loss'], epoch)
+        writer.add_scalar('Loss/Train_Regression', train_loss_components['regression_loss'], epoch)
+        writer.add_scalar('Loss/Val_Binary', val_loss_components['binary_loss'], epoch)
+        writer.add_scalar('Loss/Val_Calcium', val_loss_components['calcium_loss'], epoch)
+        writer.add_scalar('Loss/Val_Regression', val_loss_components['regression_loss'], epoch)
+        writer.add_scalar('Metrics/Average_AUROC_Train', train_metrics['average_auroc'], epoch)
+        writer.add_scalar('Metrics/Average_AUROC_Val', val_metrics['average_auroc'], epoch)
+        writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
+        
+        # Log individual biomarker metrics
+        for condition in BINARY_CONDITIONS:
+            if condition in train_metrics and condition in val_metrics:
+                if 'auroc' in train_metrics[condition] and 'auroc' in val_metrics[condition]:
+                    writer.add_scalar(f'AUROC_Train/{condition}', train_metrics[condition]['auroc'], epoch)
+                    writer.add_scalar(f'AUROC_Val/{condition}', val_metrics[condition]['auroc'], epoch)
+                if 'f1' in train_metrics[condition] and 'f1' in val_metrics[condition]:
+                    writer.add_scalar(f'F1_Train/{condition}', train_metrics[condition]['f1'], epoch)
+                    writer.add_scalar(f'F1_Val/{condition}', val_metrics[condition]['f1'], epoch)
+                if 'accuracy' in train_metrics[condition] and 'accuracy' in val_metrics[condition]:
+                    writer.add_scalar(f'Accuracy_Train/{condition}', train_metrics[condition]['accuracy'], epoch)
+                    writer.add_scalar(f'Accuracy_Val/{condition}', val_metrics[condition]['accuracy'], epoch)
+                if 'sensitivity' in train_metrics[condition] and 'sensitivity' in val_metrics[condition]:
+                    writer.add_scalar(f'Sensitivity_Train/{condition}', train_metrics[condition]['sensitivity'], epoch)
+                    writer.add_scalar(f'Sensitivity_Val/{condition}', val_metrics[condition]['sensitivity'], epoch)
+                if 'specificity' in train_metrics[condition] and 'specificity' in val_metrics[condition]:
+                    writer.add_scalar(f'Specificity_Train/{condition}', train_metrics[condition]['specificity'], epoch)
+                    writer.add_scalar(f'Specificity_Val/{condition}', val_metrics[condition]['specificity'], epoch)
+        
+        # Log calcium scoring metrics
+        if 'CalciumScoring_AbdominalAgatston' in val_metrics:
+            calcium_metrics = val_metrics['CalciumScoring_AbdominalAgatston']
+            if 'accuracy' in calcium_metrics:
+                writer.add_scalar('Accuracy_Val/CalciumScoring', calcium_metrics['accuracy'], epoch)
+            if 'auroc' in calcium_metrics:
+                writer.add_scalar('AUROC_Val/CalciumScoring', calcium_metrics['auroc'], epoch)
+        
+        # Print epoch results
+        print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
+        print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        print(f"Train Avg AUROC: {train_metrics['average_auroc']:.4f}, Val Avg AUROC: {val_metrics['average_auroc']:.4f}")
+        print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
+        
+        # Print detailed validation metrics per biomarker
+        print("\nValidation Metrics per Biomarker:")
+        print("=" * 80)
+        print(f"{'Biomarker':<15} {'AUROC':<8} {'Accuracy':<8} {'Sensitivity':<12} {'Specificity':<12}")
+        print("-" * 80)
+        
+        for biomarker_name in metrics_calc.binary_biomarkers:
+            if biomarker_name in val_metrics:
+                metrics = val_metrics[biomarker_name]
+                auroc = metrics.get('auroc', 0.0)
+                accuracy = metrics.get('accuracy', 0.0)
+                sensitivity = metrics.get('sensitivity', 0.0)
+                specificity = metrics.get('specificity', 0.0)
+                
+                print(f"{biomarker_name:<15} {auroc:<8.4f} {accuracy:<8.4f} {sensitivity:<12.4f} {specificity:<12.4f}")
+            else:
+                print(f"{biomarker_name:<15} {'N/A':<8} {'N/A':<8} {'N/A':<12} {'N/A':<12}")
+        
+        # Print multiclass biomarker metrics
+        for biomarker_name in metrics_calc.multiclass_biomarkers:
+            if biomarker_name in val_metrics:
+                multiclass_metrics = val_metrics[biomarker_name]
+                auroc = multiclass_metrics.get('auroc', 0.0)
+                accuracy = multiclass_metrics.get('accuracy', 0.0)
+                display_name = biomarker_name.replace('_', ' ')[:14]  # Truncate for display
+                print(f"{display_name:<15} {auroc:<8.4f} {accuracy:<8.4f} {'N/A':<12} {'N/A':<12}")
+                
+                # Print per-class metrics if available
+                if 'per_class' in multiclass_metrics:
+                    print(f"\n{biomarker_name} Per-Class Metrics:")
+                    print(f"{'Class':<10} {'Sensitivity':<12} {'Specificity':<12}")
+                    print("-" * 35)
+                    for class_name, class_metrics in multiclass_metrics['per_class'].items():
+                        sens = class_metrics.get('sensitivity', 0.0)
+                        spec = class_metrics.get('specificity', 0.0)
+                        display_name = class_name.replace('calcium_', '').upper()
+                        print(f"{display_name:<10} {sens:<12.4f} {spec:<12.4f}")
+        
+        print("=" * 80)
+        
+        # Save checkpoint if best model
+        is_best = val_metrics['average_auroc'] > best_avg_auroc
+        if is_best:
+            best_avg_auroc = val_metrics['average_auroc']
+            best_epoch = epoch + 1
+            patience_counter = 0  # Reset patience counter
+            print(f"New best model! Average AUROC: {best_avg_auroc:.4f}")
+        else:
+            patience_counter += 1
+            print(f"No improvement. Patience: {patience_counter}/{patience}")
+            
+            # Early stopping check
+            if patience_counter >= patience:
+                print(f"\nEarly stopping triggered! No improvement for {patience} epochs.")
+                print(f"Best model was at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+                break
+        
+        # Save checkpoint
+        checkpoint = {
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'train_loss': train_loss,
+            'val_loss': val_loss,
+            'train_metrics': train_metrics,
+            'val_metrics': val_metrics,
+            'config': config.to_dict(),
+            'best_avg_auroc': best_avg_auroc,
+            'best_epoch': best_epoch,
+            'patience_counter': patience_counter,
+            'patience': patience
+        }
+        
+        # Save latest checkpoint
+        torch.save(checkpoint, os.path.join(output_dir, 'latest_checkpoint.pth'))
+        
+        # Save best checkpoint
+        if is_best:
+            torch.save(checkpoint, os.path.join(output_dir, 'best_checkpoint.pth'))
+        
+        # Save periodic checkpoint
+        if (epoch + 1) % 10 == 0:
+            torch.save(checkpoint, os.path.join(output_dir, f'checkpoint_epoch_{epoch+1}.pth'))
+    
+    # Training completion message
+    if patience_counter >= patience:
+        print(f"\nTraining stopped early after {epoch + 1} epochs due to no improvement.")
+    else:
+        print(f"\nTraining completed after {epochs} epochs!")
+    print(f"Best model at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+    
+    # Close tensorboard writer
+    writer.close()
+    
+    return model, best_avg_auroc
 
-print('Loading data')
-transform = transforms.Compose([transforms.RandomHorizontalFlip(p=0.2),
-                                transforms.RandomApply([transforms.RandomAffine(10),
-                                transforms.RandomResizedCrop(256, scale=(1.0, 1.1), ratio=(0.75, 1.33)),
-                                transforms.ColorJitter(brightness=0.2, contrast=0.2)], p=0.75),
-                                transforms.RandomPerspective(distortion_scale=0.2, p=0.75),
-                                transforms.ToTensor(), transforms.Normalize((0.55001191,), (0.18854326,))])
-train_dataset = ClassifierDataset(args.data_dir, conditions[1:-2], transforms=transform, size=args.size, train=True, age_norm=args.age_norm, raf_norm=args.raf_norm)
-transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.55001191,), (0.18854326,))])
-test_dataset = ClassifierDataset(args.data_dir, conditions[1:-2], transforms=transform, size=args.size, train=False, age_norm=args.age_norm, raf_norm=args.raf_norm)
-train_dataloader = DataLoader(dataset=train_dataset,batch_size=args.train_batch_size, shuffle=True, num_workers=args.num_workers)
-test_dataloader = DataLoader(dataset=test_dataset, batch_size=args.test_batch_size, shuffle=False, num_workers=args.num_workers)
 
-print('Initializing')
-'''if args.pretrain:
-    print('resnet chexpert')
-    model = ResNet34(2 * 14, pretrained=True).to(device)
-    #print('coord conv chexpert')
-    #model = resnet34(pretrained=False, num_classes=2*14).to(device)
+def main():
+    parser = ArgumentParser(description='Enhanced Multi-Task Training')
+    parser.add_argument('--config_csv', required=True, help='Path to experiment configuration CSV')
+    parser.add_argument('--data_dir', required=True, help='Path to dataset directory')
+    parser.add_argument('--output_base_dir', default='/lfs/turing1/0/mahmedc/Comorbidities-Detection/models', 
+                       help='Base directory for model outputs')
+    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
+    parser.add_argument('--model_name', help='Specific model to train (if not provided, trains all must-include models)')
+    parser.add_argument('--biomarker_config', default='config/biomarker_config_default.yaml',
+                       help='Path to biomarker configuration file (YAML or JSON)')
+    
+    args = parser.parse_args()
+    
+    # Load biomarker configuration
+    print(f"Loading biomarker configuration from: {args.biomarker_config}")
+    if args.biomarker_config.endswith('.yaml') or args.biomarker_config.endswith('.yml'):
+        biomarker_config = BiomarkerConfig.load_from_yaml(args.biomarker_config)
+    elif args.biomarker_config.endswith('.json'):
+        biomarker_config = BiomarkerConfig.load_from_json(args.biomarker_config)
+    else:
+        print("Warning: Biomarker config file extension not recognized. Using default configuration.")
+        biomarker_config = get_default_biomarker_config()
+    
+    print(f"Biomarker configuration loaded:")
+    print(f"  Binary biomarkers: {[b.name for b in biomarker_config.binary_biomarkers]}")
+    print(f"  Multiclass biomarkers: {[b.name for b in biomarker_config.multiclass_biomarkers]}")  
+    print(f"  Continuous biomarkers: {[b.name for b in biomarker_config.continuous_biomarkers]}")
+    print(f"  Total output size: {biomarker_config.total_output_size}")
+    
+    # Load experiment configurations
+    config_loader = ExperimentConfigLoader(args.config_csv)
+    
+    if args.model_name:
+        # Train specific model
+        config = config_loader.load_config_by_model(args.model_name)
+        if config is None:
+            print(f"Model {args.model_name} not found in configuration file")
+            return
+        configs_to_run = [config]
+    else:
+        # Train all must-include models
+        configs_to_run = config_loader.load_must_include_configs()
+    
+    print(f"Found {len(configs_to_run)} experiments to run")
+    
+    # Run experiments
+    results = []
+    for i, config in enumerate(configs_to_run):
+        print(f"\n{'='*50}")
+        print(f"Running experiment {i+1}/{len(configs_to_run)}")
+        print(f"{'='*50}")
+        
+        # Create output directory
+        output_dir = os.path.join(args.output_base_dir, config.experiment_name)
+        
+        try:
+            model, best_auroc = train_model(
+                config=config,
+                data_dir=args.data_dir,
+                output_dir=output_dir,
+                biomarker_config=biomarker_config,
+                epochs=args.epochs
+            )
+            
+            results.append({
+                'model': config.model,
+                'experiment_name': config.experiment_name,
+                'best_avg_auroc': best_auroc,
+                'status': 'completed'
+            })
+            
+        except Exception as e:
+            print(f"Error training {config.model}: {str(e)}")
+            results.append({
+                'model': config.model,
+                'experiment_name': config.experiment_name,
+                'best_avg_auroc': 0.0,
+                'status': f'failed: {str(e)}'
+            })
+    
+    # Save results summary
+    results_df = pd.DataFrame(results)
+    results_df.to_csv(os.path.join(args.output_base_dir, 'experiment_results.csv'), index=False)
+    
+    print(f"\n{'='*50}")
+    print("All experiments completed!")
+    print(f"{'='*50}")
+    print(results_df.to_string(index=False))
 
-    load_checkpoint(args.pretrain, model)
-    model.resnet34.fc = nn.Linear(model.resnet34.fc.in_features, num_classes+2)
-    #head = list(model.head.layers.children())
-    #in_features = 512
-    #head = head[:-1]
-    #model.head.layers = nn.Sequential(*head)
-    #model.head.layers = nn.Sequential(model.head.layers, nn.Linear(in_features, num_classes+2))
-else:
-    #print('pretrained torch resnet34')
-    #model = ResNet34(3*num_classes+2, pretrained=True)
-    print('ResNet34 implementation')
-    model = ResNet34(2 * 14, pretrained=False).to(device)
-    model.resnet34.fc = nn.Linear(model.resnet34.fc.in_features, num_classes+2)
-    #model = resnet34(pretrained=False, num_classes=num_classes+2).to(device)'''
 
-model = ResNet34(num_classes=num_classes+2)
-load_checkpoint('/lfs/turing1/0/mahmedc/CT-Disease-Detection/chexpert_ckpt/chexpert_resnet_ckpt/best.pth', model)
-
-if (torch.cuda.device_count() > 1):
-        device_ids = list(range(torch.cuda.device_count()))
-        print("GPU devices being used: ", device_ids)
-        model = nn.DataParallel(model, device_ids=device_ids)
-
-model = model.to(device)
-
-#optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
-optimizer = optim.AdamW(model.parameters(), lr=args.lr)
-#scheduler = optim.lr_scheduler.StepLR(optimizer, args.decay_start_epoch, gamma=0.1)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-
-print('Training')
-train(model, train_dataloader, test_dataloader, optimizer, scheduler, args.epochs)
+if __name__ == "__main__":
+    main()

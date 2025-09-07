@@ -1,0 +1,46 @@
+binary_biomarkers:
+- class_weight: 1.0
+  name: HCC18
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.0
+  name: HCC22
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.0
+  name: HCC85
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.0
+  name: HCC96
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.0
+  name: HCC108
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.0
+  name: HCC111
+  negative_class: ABSENT
+  positive_class: PRESENT
+continuous_biomarkers:
+- max_value: null
+  min_value: null
+  name: AGE
+  normalization_factor: 101.0
+- max_value: null
+  min_value: null
+  name: RAF
+  normalization_factor: 50.0
+multiclass_biomarkers:
+- class_weights:
+    ABSENT: 1.0
+    HIGH: 1.0
+    LOW: 1.0
+    MEDIUM: 1.0
+  classes:
+  - ABSENT
+  - LOW
+  - MEDIUM
+  - HIGH
+  name: CalciumScoring_AbdominalAgatston

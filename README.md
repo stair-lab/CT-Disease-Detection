@@ -1,18 +1,258 @@
-# HCC condition classifier
+# Enhanced Multi-Task Comorbidity Detection
 
-Classifies 6 HCC, gender, age, and  RAF score based on frontal chest radiographs
+This enhanced training system supports comprehensive experimentation with 25+ different deep learning architectures for multi-task comorbidity detection from CT scans.
 
-Data directory structure set up as follows:
-* raf_data
-    * train.csv
-    * test.csv
-    * data
+## 🚀 Features
 
-Usage:
-* Training: python train.py --data_dir <path_to_data> --checkpoint_dir <checkpoint_save_directory> --size <size_of_xrays> -age_norm <normalization_for_age> --raf_norm <normalization_for_raf> --lr <learning_rate> --epochs <number_of_epochs> --train_batch_size <batch_size_for_training> --test_batch_size <batch_size_for_testing> --num_workers <number_of_workers> --decay_start_epoch <epoch_to_start_lr_decay>
-* Testing: python test.py --data_dir <path_to_data> --checkpoint_path <path_to_checkpoint> --out_path <test_csv_location> --size <size_of_xrays> --age_norm <normalization_for_age> --raf_norm <normalization_for_raf> --only_pred <if_no_csv_file_is_used> --calc_stats <get_specificity_and_sensitivity>
+### ✅ Implemented
+- **25+ Model Architectures**: CNNs, Vision Transformers, Vision-Language Models, Diffusion Models
+- **Multi-Task Learning**: Binary classification (7 HCC conditions) + Multiclass (calcium scoring) + Regression (age, RAF)
+- **Comprehensive Logging**: TensorBoard integration with loss curves, metrics per biomarker
+- **Advanced Checkpointing**: Best model selection based on average AUROC across biomarkers
+- **Class Balancing**: Inverse frequency weighting and balanced batch sampling
+- **Flexible Configuration**: CSV-based experiment configuration system
+- **Memory Management**: GPU memory requirement checking and optimization
+- **Validation Pipeline**: Separate validation passes at each epoch
+- **Metrics Tracking**: AUROC, F1-score, accuracy per biomarker with optimal thresholding
+
+### 🔧 Architecture Support Status
+- ✅ **Fully Implemented**: ResNet (18/34/50), DenseNet-121, EfficientNet (B0/B4), ConvNeXt-Base
+- ✅ **Implemented with TIMM**: ViT variants (DINOv2, MAE), Swin Transformer, MaxViT
+- 🔄 **Placeholder Implementation**: CLIP, BLIP-2, Medical VLMs, Diffusion Models
+- 📋 **Future Enhancement**: Full CLIP/VLM integration with proper text encoders
+
+## 📁 Project Structure
+
+```
+CT-Disease-Detection/
+├── model/
+│   ├── model_factory.py       # Model factory supporting all architectures
+│   ├── resnet34.py           # Original ResNet-34 implementation
+│   └── cc_resnet.py          # Coordinate convolution ResNet
+├── config/
+│   ├── experiment_config.py   # Configuration system
+│   └── __init__.py
+├── train_enhanced.py          # Enhanced training pipeline
+├── run_experiments.py         # Experiment runner script
+├── test_setup.py             # Setup verification script
+├── experimentation_plan_simplified.csv  # Experiment configurations
+├── requirements_enhanced.txt  # Enhanced dependencies
+└── README_enhanced.md        # This file
+```
+
+## 🛠 Setup
+
+### 1. Environment Setup
+
+```bash
+# Activate your conda environment
+conda activate mahmedc_env
+
+# Install enhanced dependencies
+pip install -r requirements_enhanced.txt
+```
+
+### 2. Verify Setup
+
+```bash
+# Test that everything is working
+python test_setup.py
+```
+
+### 3. Prepare Data
+
+Ensure your data directory contains:
+- `train1.csv` - Training data labels
+- `test1.csv` - Validation data labels  
+- `data/` - Directory with CT scan images (PNG format)
+
+## 🏃 Running Experiments
+
+### Quick Start - Single Model
+
+```bash
+# Run a specific model
+python train_enhanced.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --data_dir /path/to/your/data \
+    --model_name "ResNet-18" \
+    --epochs 100
+```
+
+### Batch Experiments - Must Include Models
+
+```bash
+# Run all must-include experiments
+python run_experiments.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+    --output_base_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/models \
+    --epochs 100 \
+    --must_include_only \
+    --check_memory
+```
+
+### Advanced Usage
+
+```bash
+# Dry run to see what would be executed
+python run_experiments.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --data_dir /path/to/data \
+    --dry_run \
+    --check_memory
+
+# Run specific architectural family
+python run_experiments.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --data_dir /path/to/data \
+    --model_name "ViT-Base (DINOv2)" \
+    --epochs 50
+```
+
+## 📊 Experiment Configuration
+
+The system uses `experimentation_plan_simplified.csv` to configure experiments. Key parameters:
+
+- **Model**: Architecture name (must match ModelFactory names)
+- **Must Include**: Whether to include in batch runs
+- **Learning Rate**: Single value or list for hyperparameter search
+- **Batch Size**: Training batch size
+- **Optimizer**: AdamW, Adam, or SGD
+- **Scheduler**: CosineAnnealing, ReduceLROnPlateau, etc.
+- **Expected_GPU_Memory**: For memory checking
+- **Class_Weighting**: inverse_frequency for balanced training
+- **Sampling_Strategy**: balanced_batch for balanced sampling
+
+## 📈 Monitoring and Results
+
+### TensorBoard Logging
+
+```bash
+# View training progress
+tensorboard --logdir /lfs/turing1/0/mahmedc/Comorbidities-Detection/models
+```
+
+Logged metrics include:
+- Training/validation loss (total and per-task)
+- AUROC per biomarker
+- Average AUROC for model selection
+- Learning rate schedules
+- F1 scores per biomarker
+
+### Output Structure
+
+Each experiment creates:
+```
+models/
+└── {experiment_name}/
+    ├── tensorboard/           # TensorBoard logs
+    ├── best_checkpoint.pth    # Best model (highest avg AUROC)
+    ├── latest_checkpoint.pth  # Most recent model
+    ├── checkpoint_epoch_*.pth # Periodic checkpoints
+    └── config.json           # Experiment configuration
+```
+
+## 🎯 Multi-Task Learning Details
+
+### Task Structure
+- **Binary Classification** (7 tasks): HCC18, HCC22, HCC85, HCC96, HCC108, HCC111, GENDER
+- **Multiclass Classification** (1 task): CalciumScoring_AbdominalAgatston (4 classes)
+- **Regression** (2 tasks): AGE, RAF
+
+### Loss Function
+Combined loss: `L_total = L_binary + L_calcium + L_regression`
+- Binary: Weighted BCE with inverse frequency weighting
+- Calcium: Cross-entropy loss
+- Regression: MSE loss
+
+### Model Selection
+Best model selected based on **average AUROC** across all binary classification and multiclass tasks.
+
+## 🔧 Customization
+
+### Adding New Models
+
+1. Add model creation method to `ModelFactory` in `model/model_factory.py`
+2. Add entry to CSV configuration file
+3. Update memory requirements in `get_model_memory_requirement()`
+
+### Modifying Training
+
+Key components to customize:
+- `MultiTaskLoss`: Modify loss weighting
+- `MetricsCalculator`: Add new metrics
+- `create_data_transforms()`: Modify augmentations
+- `train_epoch()`/`validate_epoch()`: Modify training loop
+
+## 📋 Experiment Tracking
+
+The system automatically tracks:
+- All hyperparameters and configurations
+- Training/validation metrics per epoch
+- Best model checkpoints
+- Experiment success/failure status
+- GPU memory usage and assignments
+
+Results are saved in:
+- Individual experiment directories
+- `experiment_results.csv` summary file
+- TensorBoard logs for visualization
+
+## 🐛 Troubleshooting
+
+### Common Issues
+
+1. **CUDA Out of Memory**
+   - Use `--check_memory` flag to verify GPU requirements
+   - Reduce batch size in CSV configuration
+   - Use models with lower memory requirements
+
+2. **Missing Dependencies**
+   - Run `pip install -r requirements_enhanced.txt`
+   - For TIMM models: `pip install timm>=0.9.0`
+
+3. **Import Errors**
+   - Run `python test_setup.py` to verify setup
+   - Check that all paths are correct
+
+4. **Data Loading Issues**
+   - Verify CSV files have correct column names
+   - Check that image files exist in `data/` directory
+   - Ensure normalization values match your data
+
+### Performance Tips
+
+1. **GPU Memory Optimization**
+   - Use gradient checkpointing for large models
+   - Enable mixed precision training
+   - Use smaller batch sizes for memory-intensive models
+
+2. **Training Speed**
+   - Use multiple GPUs with DataParallel
+   - Increase `num_workers` in DataLoader
+   - Use SSD storage for faster I/O
+
+## 🔮 Future Enhancements
+
+- **Full CLIP Integration**: Proper vision-language model support
+- **Medical VLM Support**: Integration with MedCLIP, BiomedCLIP
+- **Hyperparameter Optimization**: Automated hyperparameter tuning
+- **Distributed Training**: Multi-GPU and multi-node support
+- **Advanced Metrics**: ROC curves, confusion matrices, per-class analysis
+- **Model Interpretability**: Attention visualization, GradCAM
+
+## 📞 Support
+
+For issues or questions:
+1. Check the troubleshooting section above
+2. Run `python test_setup.py` to verify setup
+3. Review TensorBoard logs for training issues
+4. Check experiment output directories for detailed logs
 
 Questions: ayis@ayis.org
+
+## 📄 License
 
 Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International Public License
 
@@ -45,7 +285,7 @@ Term. The term of this Public License is specified in Section 6(a).
 Media and formats; technical modifications allowed. The Licensor authorizes You to exercise the Licensed Rights in all media and formats whether now known or hereafter created, and to make technical modifications necessary to do so. The Licensor waives and/or agrees not to assert any right or authority to forbid You from making technical modifications necessary to exercise the Licensed Rights, including technical modifications necessary to circumvent Effective Technological Measures. For purposes of this Public License, simply making modifications authorized by this Section 2(a)(4) never produces Adapted Material.
 Downstream recipients.
 Offer from the Licensor – Licensed Material. Every recipient of the Licensed Material automatically receives an offer from the Licensor to exercise the Licensed Rights under the terms and conditions of this Public License.
-Additional offer from the Licensor – Adapted Material. Every recipient of Adapted Material from You automatically receives an offer from the Licensor to exercise the Licensed Rights in the Adapted Material under the conditions of the Adapter’s License You apply.
+Additional offer from the Licensor – Adapted Material. Every recipient of Adapted Material from You automatically receives an offer from the Licensor to exercise the Licensed Rights in the Adapted Material under the conditions of the Adapter's License You apply.
 No downstream restrictions. You may not offer or impose any additional or different terms or conditions on, or apply any Effective Technological Measures to, the Licensed Material if doing so restricts exercise of the Licensed Rights by any recipient of the Licensed Material.
 No endorsement. Nothing in this Public License constitutes or may be construed as permission to assert or imply that You are, or that Your use of the Licensed Material is, connected with, or sponsored, endorsed, or granted official status by, the Licensor or others designated to receive attribution as provided in Section 3(a)(1)(A)(i).
 Other rights.
@@ -74,7 +314,7 @@ If requested by the Licensor, You must remove any of the information required by
 ShareAlike.
 In addition to the conditions in Section 3(a), if You Share Adapted Material You produce, the following conditions also apply.
 
-The Adapter’s License You apply must be a Creative Commons license with the same License Elements, this version or later, or a BY-NC-SA Compatible License.
+The Adapter's License You apply must be a Creative Commons license with the same License Elements, this version or later, or a BY-NC-SA Compatible License.
 You must include the text of, or the URI or hyperlink to, the Adapter's License You apply. You may satisfy this condition in any reasonable manner based on the medium, means, and context in which You Share Adapted Material.
 You may not offer or impose any additional or different terms or conditions on, or apply any Effective Technological Measures to, Adapted Material that restrict exercise of the rights granted under the Adapter's License You apply.
 Section 4 – Sui Generis Database Rights.

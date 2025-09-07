@@ -1,0 +1,47 @@
+binary_biomarkers:
+- class_weight: 2.0
+  name: HCC18
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.5
+  name: HCC22
+  negative_class: ABSENT
+  positive_class: PRESENT
+- class_weight: 1.0
+  name: Diabetes
+  negative_class: 'NO'
+  positive_class: 'YES'
+continuous_biomarkers:
+- max_value: 120
+  min_value: 0
+  name: AGE
+  normalization_factor: 100.0
+- max_value: 60
+  min_value: 10
+  name: BMI
+  normalization_factor: 50.0
+- max_value: null
+  min_value: null
+  name: BloodPressure
+  normalization_factor: 200.0
+multiclass_biomarkers:
+- class_weights:
+    MILD: 1.0
+    MODERATE: 1.5
+    SEVERE: 2.0
+  classes:
+  - MILD
+  - MODERATE
+  - SEVERE
+  name: Severity
+- class_weights:
+    I: 1.0
+    II: 1.0
+    III: 1.0
+    IV: 1.0
+  classes:
+  - I
+  - II
+  - III
+  - IV
+  name: Stage
