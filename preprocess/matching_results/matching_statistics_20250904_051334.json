@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-09-04 05:13:34",
+  "csv_file": "2025_08_31_Biomarkers_Outcomes_Joined_Fixed.csv",
+  "png_directory": "data",
+  "total_csv_identifiers": 64505,
+  "total_png_files": 53357,
+  "successful_matches": 48770,
+  "unmatched_csv_count": 15735,
+  "unmatched_png_count": 4587,
+  "csv_match_rate": 75.60654212851718,
+  "png_match_rate": 91.40318983451094,
+  "overall_efficiency": 75.60654212851718
+}
