@@ -19,6 +19,8 @@ import pandas as pd
 from tqdm import tqdm
 import json
 import time
+import logging
+import sys
 from argparse import ArgumentParser
 from typing import Dict, List, Tuple, Any
 
@@ -412,6 +414,59 @@ def create_data_transforms(config: ExperimentConfig, is_training=True):
         return transforms.Compose(transform_list)
 
 
+def setup_logging(output_dir: str, experiment_name: str):
+    """Set up comprehensive logging for the experiment"""
+    # Create logs directory
+    logs_dir = os.path.join(output_dir, 'logs')
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Set up main logger
+    logger = logging.getLogger('experiment')
+    logger.setLevel(logging.INFO)
+    
+    # Clear existing handlers
+    logger.handlers.clear()
+    
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    simple_formatter = logging.Formatter('%(asctime)s - %(message)s')
+    
+    # File handler for detailed logs
+    detailed_log_file = os.path.join(logs_dir, 'experiment_detailed.log')
+    file_handler = logging.FileHandler(detailed_log_file)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(detailed_formatter)
+    logger.addHandler(file_handler)
+    
+    # File handler for training progress
+    training_log_file = os.path.join(logs_dir, 'training_progress.log')
+    training_handler = logging.FileHandler(training_log_file)
+    training_handler.setLevel(logging.INFO)
+    training_handler.setFormatter(simple_formatter)
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(simple_formatter)
+    logger.addHandler(console_handler)
+    
+    # Create separate logger for training progress
+    training_logger = logging.getLogger('training')
+    training_logger.setLevel(logging.INFO)
+    training_logger.handlers.clear()
+    training_logger.addHandler(training_handler)
+    training_logger.addHandler(console_handler)
+    
+    # Log experiment start
+    logger.info(f"Starting experiment: {experiment_name}")
+    logger.info(f"Output directory: {output_dir}")
+    logger.info(f"Logs directory: {logs_dir}")
+    
+    return logger, training_logger
+
+
 def create_balanced_sampler(dataset, conditions):
     """Create balanced sampler for training"""
     # Get all labels for binary tasks
@@ -465,7 +520,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, metrics_calc):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
+
         # Accumulate metrics
         total_loss += loss.item()
         for key in loss_components:
@@ -556,24 +611,34 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
+    # Setup comprehensive logging
+    logger, training_logger = setup_logging(output_dir, config.experiment_name)
+    
     # Setup tensorboard logging
     writer = SummaryWriter(log_dir=os.path.join(output_dir, 'tensorboard'))
     
     # Save configuration
-    with open(os.path.join(output_dir, 'config.json'), 'w') as f:
+    config_file = os.path.join(output_dir, 'config.json')
+    with open(config_file, 'w') as f:
         json.dump(config.to_dict(), f, indent=2)
+    logger.info(f"Configuration saved to: {config_file}")
     
-    print(f"Starting experiment: {config.experiment_name}")
-    print(f"Model: {config.model}")
-    print(f"Output directory: {output_dir}")
-    print(f"Expected GPU memory: {config.expected_gpu_memory}")
+    # Save biomarker configuration
+    biomarker_config_file = os.path.join(output_dir, 'biomarker_config.json')
+    biomarker_config.save_to_json(biomarker_config_file)
+    logger.info(f"Biomarker configuration saved to: {biomarker_config_file}")
+    
+    logger.info(f"Model: {config.model}")
+    logger.info(f"Expected GPU memory: {config.expected_gpu_memory}")
+    logger.info(f"Training epochs: {epochs}")
+    logger.info(f"Data directory: {data_dir}")
     
     # Create data transforms
     train_transform = create_data_transforms(config, is_training=True)
     val_transform = create_data_transforms(config, is_training=False)
     
     # Load datasets
-    print("Loading datasets...")
+    logger.info("Loading datasets...")
     train_dataset = ClassifierDataset(
         data_dir, biomarker_config, transforms=train_transform, 
         size=256, train=True
@@ -584,15 +649,15 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         size=256, train=False
     )
     
-    print(f"Train dataset size: {len(train_dataset)}")
-    print(f"Validation dataset size: {len(val_dataset)}")
+    logger.info(f"Train dataset size: {len(train_dataset)}")
+    logger.info(f"Validation dataset size: {len(val_dataset)}")
     
     # Compute class weights if specified
     class_weights = None
     if config.class_weighting == 'inverse_frequency':
-        print("Computing class weights...")
+        logger.info("Computing class weights...")
         class_weights = compute_class_weights_for_dataset(train_dataset, CONDITIONS)
-        print(f"Class weights: {class_weights}")
+        logger.info(f"Class weights: {class_weights}")
     
     # Create data loaders
     if config.sampling_strategy == 'balanced_batch':
@@ -613,7 +678,7 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     )
     
     # Create model
-    print("Creating model...")
+    logger.info("Creating model...")
     model = ModelFactory.create_model(
         architecture=config.model,
         num_classes=biomarker_config.total_output_size,
@@ -621,14 +686,18 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         fine_tuning_strategy=config.fine_tuning_strategy,
         dropout=config.dropout
     )
-    
+
     model = model.to(device)
-    
-    # Print model info
+
+    # Log model info
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
+    logger.info(f"Total parameters: {total_params:,}")
+    logger.info(f"Trainable parameters: {trainable_params:,}")
+    logger.info(f"Model architecture: {config.model}")
+    logger.info(f"Pretrained weights: {config.pretrained_weights}")
+    logger.info(f"Fine-tuning strategy: {config.fine_tuning_strategy}")
+    logger.info(f"Dropout: {config.dropout}")
     
     # Create loss function
     criterion = MultiTaskLoss(class_weights=class_weights, calcium_classes=CALCIUM_CLASSES)
@@ -646,12 +715,16 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     patience = 10
     patience_counter = 0
     
-    print(f"\nStarting training for {epochs} epochs with early stopping (patience: {patience})...")
+    logger.info(f"Starting training for {epochs} epochs with early stopping (patience: {patience})")
+    logger.info(f"Optimizer: {config.optimizer}")
+    logger.info(f"Learning rate: {config.learning_rate}")
+    logger.info(f"Batch size: {config.batch_size}")
+    logger.info(f"Scheduler: {config.scheduler}")
     
     for epoch in range(epochs):
         epoch_start_time = time.time()
         
-        print(f"\nEpoch {epoch+1}/{epochs}")
+        training_logger.info(f"Starting Epoch {epoch+1}/{epochs}")
         
         # Training phase
         train_loss, train_metrics, train_loss_components = train_epoch(
@@ -711,17 +784,17 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
             if 'auroc' in calcium_metrics:
                 writer.add_scalar('AUROC_Val/CalciumScoring', calcium_metrics['auroc'], epoch)
         
-        # Print epoch results
-        print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
-        print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-        print(f"Train Avg AUROC: {train_metrics['average_auroc']:.4f}, Val Avg AUROC: {val_metrics['average_auroc']:.4f}")
-        print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
+        # Log epoch results
+        training_logger.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
+        training_logger.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+        training_logger.info(f"Train Avg AUROC: {train_metrics['average_auroc']:.4f}, Val Avg AUROC: {val_metrics['average_auroc']:.4f}")
+        training_logger.info(f"Learning Rate: {optimizer.param_groups[0]['lr']:.2e}")
         
-        # Print detailed validation metrics per biomarker
-        print("\nValidation Metrics per Biomarker:")
-        print("=" * 80)
-        print(f"{'Biomarker':<15} {'AUROC':<8} {'Accuracy':<8} {'Sensitivity':<12} {'Specificity':<12}")
-        print("-" * 80)
+        # Log detailed validation metrics per biomarker
+        training_logger.info("Validation Metrics per Biomarker:")
+        training_logger.info("=" * 80)
+        training_logger.info(f"{'Biomarker':<15} {'AUROC':<8} {'Accuracy':<8} {'Sensitivity':<12} {'Specificity':<12}")
+        training_logger.info("-" * 80)
         
         for biomarker_name in metrics_calc.binary_biomarkers:
             if biomarker_name in val_metrics:
@@ -731,31 +804,31 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
                 sensitivity = metrics.get('sensitivity', 0.0)
                 specificity = metrics.get('specificity', 0.0)
                 
-                print(f"{biomarker_name:<15} {auroc:<8.4f} {accuracy:<8.4f} {sensitivity:<12.4f} {specificity:<12.4f}")
+                training_logger.info(f"{biomarker_name:<15} {auroc:<8.4f} {accuracy:<8.4f} {sensitivity:<12.4f} {specificity:<12.4f}")
             else:
-                print(f"{biomarker_name:<15} {'N/A':<8} {'N/A':<8} {'N/A':<12} {'N/A':<12}")
+                training_logger.info(f"{biomarker_name:<15} {'N/A':<8} {'N/A':<8} {'N/A':<12} {'N/A':<12}")
         
-        # Print multiclass biomarker metrics
+        # Log multiclass biomarker metrics
         for biomarker_name in metrics_calc.multiclass_biomarkers:
             if biomarker_name in val_metrics:
                 multiclass_metrics = val_metrics[biomarker_name]
                 auroc = multiclass_metrics.get('auroc', 0.0)
                 accuracy = multiclass_metrics.get('accuracy', 0.0)
                 display_name = biomarker_name.replace('_', ' ')[:14]  # Truncate for display
-                print(f"{display_name:<15} {auroc:<8.4f} {accuracy:<8.4f} {'N/A':<12} {'N/A':<12}")
+                training_logger.info(f"{display_name:<15} {auroc:<8.4f} {accuracy:<8.4f} {'N/A':<12} {'N/A':<12}")
                 
-                # Print per-class metrics if available
+                # Log per-class metrics if available
                 if 'per_class' in multiclass_metrics:
-                    print(f"\n{biomarker_name} Per-Class Metrics:")
-                    print(f"{'Class':<10} {'Sensitivity':<12} {'Specificity':<12}")
-                    print("-" * 35)
+                    training_logger.info(f"{biomarker_name} Per-Class Metrics:")
+                    training_logger.info(f"{'Class':<10} {'Sensitivity':<12} {'Specificity':<12}")
+                    training_logger.info("-" * 35)
                     for class_name, class_metrics in multiclass_metrics['per_class'].items():
                         sens = class_metrics.get('sensitivity', 0.0)
                         spec = class_metrics.get('specificity', 0.0)
                         display_name = class_name.replace('calcium_', '').upper()
-                        print(f"{display_name:<10} {sens:<12.4f} {spec:<12.4f}")
+                        training_logger.info(f"{display_name:<10} {sens:<12.4f} {spec:<12.4f}")
         
-        print("=" * 80)
+        training_logger.info("=" * 80)
         
         # Save checkpoint if best model
         is_best = val_metrics['average_auroc'] > best_avg_auroc
@@ -763,15 +836,17 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
             best_avg_auroc = val_metrics['average_auroc']
             best_epoch = epoch + 1
             patience_counter = 0  # Reset patience counter
-            print(f"New best model! Average AUROC: {best_avg_auroc:.4f}")
+            training_logger.info(f"🎯 New best model! Average AUROC: {best_avg_auroc:.4f}")
+            logger.info(f"New best model saved at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
         else:
             patience_counter += 1
-            print(f"No improvement. Patience: {patience_counter}/{patience}")
+            training_logger.info(f"No improvement. Patience: {patience_counter}/{patience}")
             
             # Early stopping check
             if patience_counter >= patience:
-                print(f"\nEarly stopping triggered! No improvement for {patience} epochs.")
-                print(f"Best model was at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+                training_logger.info(f"⏹️ Early stopping triggered! No improvement for {patience} epochs.")
+                training_logger.info(f"Best model was at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+                logger.info(f"Training stopped early after {epoch + 1} epochs due to no improvement")
                 break
         
         # Save checkpoint
@@ -802,15 +877,65 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         if (epoch + 1) % 10 == 0:
             torch.save(checkpoint, os.path.join(output_dir, f'checkpoint_epoch_{epoch+1}.pth'))
     
-    # Training completion message
+    # Training completion message and final logging
     if patience_counter >= patience:
-        print(f"\nTraining stopped early after {epoch + 1} epochs due to no improvement.")
+        logger.info(f"Training stopped early after {epoch + 1} epochs due to no improvement.")
+        training_logger.info(f"🏁 Training stopped early after {epoch + 1} epochs")
     else:
-        print(f"\nTraining completed after {epochs} epochs!")
-    print(f"Best model at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+        logger.info(f"Training completed after {epochs} epochs!")
+        training_logger.info(f"🏁 Training completed after {epochs} epochs!")
+    
+    logger.info(f"Best model at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+    training_logger.info(f"🏆 Best model at epoch {best_epoch} with average AUROC: {best_avg_auroc:.4f}")
+    
+    # Save comprehensive training summary
+    summary_file = os.path.join(output_dir, 'training_summary.txt')
+    with open(summary_file, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("TRAINING SUMMARY\n")
+        f.write("=" * 80 + "\n\n")
+        f.write(f"Experiment Name: {config.experiment_name}\n")
+        f.write(f"Model: {config.model}\n")
+        f.write(f"Total epochs trained: {epoch + 1}\n")
+        f.write(f"Best epoch: {best_epoch}\n")
+        f.write(f"Best average AUROC: {best_avg_auroc:.4f}\n")
+        f.write(f"Total parameters: {total_params:,}\n")
+        f.write(f"Trainable parameters: {trainable_params:,}\n")
+        f.write(f"Expected GPU memory: {config.expected_gpu_memory}\n")
+        f.write(f"Pretrained weights: {config.pretrained_weights}\n")
+        f.write(f"Fine-tuning strategy: {config.fine_tuning_strategy}\n")
+        f.write(f"Learning rate: {config.learning_rate}\n")
+        f.write(f"Batch size: {config.batch_size}\n")
+        f.write(f"Optimizer: {config.optimizer}\n")
+        f.write(f"Scheduler: {config.scheduler}\n")
+        f.write(f"Dropout: {config.dropout}\n")
+        f.write(f"Class weighting: {config.class_weighting}\n")
+        f.write(f"Sampling strategy: {config.sampling_strategy}\n")
+        f.write(f"Train dataset size: {len(train_dataset)}\n")
+        f.write(f"Validation dataset size: {len(val_dataset)}\n")
+        f.write("\n" + "=" * 80 + "\n")
+    
+    # Log final model performance summary
+    logger.info("=== EXPERIMENT SUMMARY ===")
+    logger.info(f"Model: {config.model}")
+    logger.info(f"Total epochs trained: {epoch + 1}")
+    logger.info(f"Best epoch: {best_epoch}")
+    logger.info(f"Best average AUROC: {best_avg_auroc:.4f}")
+    logger.info(f"Total parameters: {total_params:,}")
+    logger.info(f"Trainable parameters: {trainable_params:,}")
+    logger.info(f"Training summary saved to: {summary_file}")
+    logger.info("=== END EXPERIMENT ===")
     
     # Close tensorboard writer
     writer.close()
+    
+    # Close logging handlers
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
+    for handler in training_logger.handlers[:]:
+        handler.close()
+        training_logger.removeHandler(handler)
     
     return model, best_avg_auroc
 

@@ -258,12 +258,13 @@ class ModelFactory:
     @staticmethod
     def _create_convnext_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout):
         if pretrained_weights == "ImageNet-22K":
-            model = models.convnext_base(weights=ConvNeXt_Base_Weights.IMAGENET22K_V1)
+            # Use IMAGENET1K_V1 as IMAGENET22K_V1 is not available
+            model = models.convnext_base(weights=ConvNeXt_Base_Weights.IMAGENET1K_V1)
+            # Keep 3-channel input for pretrained weights, we'll convert images to 3-channel
         else:
             model = models.convnext_base(weights=None)
-        
-        # Modify for single channel input
-        model.features[0][0] = nn.Conv2d(1, 128, kernel_size=4, stride=4)
+            # For non-pretrained, modify for single channel input
+            model.features[0][0] = nn.Conv2d(1, 128, kernel_size=4, stride=4)
         
         # Replace classifier
         feature_dim = model.classifier[2].in_features
@@ -291,19 +292,14 @@ class ModelFactory:
         else:  # Large
             model_name = "vit_large_patch14_dinov2.lvd142m"
         
-        model = timm.create_model(model_name, pretrained=True, num_classes=0)  # Remove head
+        model = timm.create_model(model_name, pretrained=True, num_classes=0, img_size=256)  # Remove head, set input size
         
         # Add custom multi-task head
         feature_dim = model.num_features
         model.head = MultiTaskHead(feature_dim, dropout=dropout)
         
-        # Modify for single channel input
-        if hasattr(model, 'patch_embed'):
-            old_conv = model.patch_embed.proj
-            model.patch_embed.proj = nn.Conv2d(1, old_conv.out_channels, 
-                                              kernel_size=old_conv.kernel_size,
-                                              stride=old_conv.stride, 
-                                              padding=old_conv.padding)
+        # Keep 3-channel input since training script converts images to 3-channel
+        # No need to modify patch_embed for single channel
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
