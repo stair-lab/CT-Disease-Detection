@@ -1,0 +1,326 @@
+================================================================================
+COMPREHENSIVE DIAGNOSTIC NAMES ANALYSIS
+Oscar Master Cohort Dataset
+================================================================================
+
+📊 ANALYSIS SCOPE:
+   • Top 15 most prevalent conditions
+   • Top 5 rarest conditions (with >0 patients)
+   • Total conditions analyzed: 20
+
+
+1. TOP 15 MOST PREVALENT CONDITIONS - DIAGNOSTIC NAMES ANALYSIS
+===========================================================================
+
+📋 Essential Htn:
+   Patients: 40,470
+   Unique diagnostic descriptions: 71
+   Unique diagnostic codes: 3
+   Avg descriptions per code: 23.7
+   Top 3 diagnostic descriptions:
+     1. Unspecified essential hypertension (13,610 patients, 33.6%)
+     2. Essential hypertension, benign (10,053 patients, 24.8%)
+     3. Essential (primary) hypertension (8,001 patients, 19.8%)
+   Text characteristics:
+     Avg words per description: 2.9
+     Avg characters per description: 30.2
+     Contains 'HCC': 63 descriptions (0.2%)
+
+📋 Type 2 Diabetes:
+   Patients: 34,663
+   Unique diagnostic descriptions: 330
+   Unique diagnostic codes: 57
+   Avg descriptions per code: 5.8
+   Top 3 diagnostic descriptions:
+     1. Type II or unspecified type diabetes mellitus without mentio... (5,778 patients, 16.7%)
+     2. Other abnormal glucose (4,615 patients, 13.3%)
+     3. Impaired fasting glucose (4,540 patients, 13.1%)
+   Text characteristics:
+     Avg words per description: 5.5
+     Avg characters per description: 41.3
+     Contains 'HCC': 1,966 descriptions (5.7%)
+
+📋 Impaired Glucose:
+   Patients: 28,981
+   Unique diagnostic descriptions: 90
+   Unique diagnostic codes: 8
+   Avg descriptions per code: 11.2
+   Top 3 diagnostic descriptions:
+     1. Other abnormal glucose (5,511 patients, 19.0%)
+     2. Impaired fasting glucose (5,083 patients, 17.5%)
+     3. Hyperglycemia (3,572 patients, 12.3%)
+   Text characteristics:
+     Avg words per description: 3.0
+     Avg characters per description: 23.8
+     Contains 'HCC': 1,226 descriptions (4.2%)
+
+📋 Tobacco Use:
+   Patients: 20,281
+   Unique diagnostic descriptions: 146
+   Unique diagnostic codes: 21
+   Avg descriptions per code: 7.0
+   Top 3 diagnostic descriptions:
+     1. Personal history of nicotine dependence (7,606 patients, 37.5%)
+     2. Tobacco use disorder (5,136 patients, 25.3%)
+     3. Personal history of tobacco use, presenting hazards to healt... (2,357 patients, 11.6%)
+   Text characteristics:
+     Avg words per description: 4.5
+     Avg characters per description: 33.6
+     Contains 'HCC': 0 descriptions (0.0%)
+
+📋 Mi:
+   Patients: 16,867
+   Unique diagnostic descriptions: 290
+   Unique diagnostic codes: 48
+   Avg descriptions per code: 6.0
+   Top 3 diagnostic descriptions:
+     1. Atherosclerotic heart disease of native coronary artery with... (3,660 patients, 21.7%)
+     2. Coronary atherosclerosis of native coronary artery (2,874 patients, 17.0%)
+     3. Coronary atherosclerosis of unspecified type of vessel, nati... (2,788 patients, 16.5%)
+   Text characteristics:
+     Avg words per description: 7.8
+     Avg characters per description: 60.0
+     Contains 'HCC': 934 descriptions (5.5%)
+
+📋 Cvd:
+   Patients: 10,586
+   Unique diagnostic descriptions: 462
+   Unique diagnostic codes: 123
+   Avg descriptions per code: 3.8
+   Top 3 diagnostic descriptions:
+     1. Occlusion and stenosis of carotid artery without mention of ... (2,042 patients, 19.3%)
+     2. Unspecified transient cerebral ischemia (1,271 patients, 12.0%)
+     3. Acute, but ill-defined, cerebrovascular disease (795 patients, 7.5%)
+   Text characteristics:
+     Avg words per description: 6.0
+     Avg characters per description: 49.0
+     Contains 'HCC': 1,082 descriptions (10.2%)
+
+📋 Osteoporosis:
+   Patients: 9,309
+   Unique diagnostic descriptions: 112
+   Unique diagnostic codes: 35
+   Avg descriptions per code: 3.2
+   Top 3 diagnostic descriptions:
+     1. Osteoporosis, unspecified (3,989 patients, 42.9%)
+     2. Age-related osteoporosis without current pathological fractu... (2,015 patients, 21.6%)
+     3. Osteoporosis (1,357 patients, 14.6%)
+   Text characteristics:
+     Avg words per description: 3.5
+     Avg characters per description: 37.4
+     Contains 'HCC': 46 descriptions (0.5%)
+
+📋 Heart Failure:
+   Patients: 8,736
+   Unique diagnostic descriptions: 210
+   Unique diagnostic codes: 24
+   Avg descriptions per code: 8.8
+   Top 3 diagnostic descriptions:
+     1. Congestive heart failure, unspecified (2,149 patients, 24.6%)
+     2. Heart failure, unspecified (1,163 patients, 13.3%)
+     3. Chronic diastolic (congestive) heart failure (714 patients, 8.2%)
+   Text characteristics:
+     Avg words per description: 5.1
+     Avg characters per description: 42.0
+     Contains 'HCC': 2,427 descriptions (27.8%)
+
+📋 Hypertensive Ckd:
+   Patients: 7,877
+   Unique diagnostic descriptions: 71
+   Unique diagnostic codes: 2
+   Avg descriptions per code: 35.5
+   Top 3 diagnostic descriptions:
+     1. Hypertensive chronic kidney disease with stage 1 through sta... (6,082 patients, 77.2%)
+     2. Unspecified hypertensive kidney disease with chronic kidney ... (1,010 patients, 12.8%)
+     3. Hypertensive chronic kidney disease with stage 5 chronic kid... (105 patients, 1.3%)
+   Text characteristics:
+     Avg words per description: 17.0
+     Avg characters per description: 120.2
+     Contains 'HCC': 267 descriptions (3.4%)
+
+📋 Chronic Liver Disease:
+   Patients: 7,080
+   Unique diagnostic descriptions: 109
+   Unique diagnostic codes: 23
+   Avg descriptions per code: 4.7
+   Top 3 diagnostic descriptions:
+     1. Fatty liver (3,008 patients, 42.5%)
+     2. Other chronic nonalcoholic liver disease (1,055 patients, 14.9%)
+     3. Hepatic steatosis (609 patients, 8.6%)
+   Text characteristics:
+     Avg words per description: 3.3
+     Avg characters per description: 23.6
+     Contains 'HCC': 592 descriptions (8.4%)
+
+📋 Hypertensive Heart Disease:
+   Patients: 5,026
+   Unique diagnostic descriptions: 58
+   Unique diagnostic codes: 12
+   Avg descriptions per code: 4.8
+   Top 3 diagnostic descriptions:
+     1. Hypertensive heart disease with heart failure (2,925 patients, 58.2%)
+     2. Hypertensive heart disease without heart failure (677 patients, 13.5%)
+     3. Unspecified hypertensive heart disease without heart failure (535 patients, 10.6%)
+   Text characteristics:
+     Avg words per description: 6.3
+     Avg characters per description: 49.5
+     Contains 'HCC': 353 descriptions (7.0%)
+
+📋 Aaa:
+   Patients: 3,244
+   Unique diagnostic descriptions: 97
+   Unique diagnostic codes: 26
+   Avg descriptions per code: 3.7
+   Top 3 diagnostic descriptions:
+     1. Abdominal aneurysm without mention of rupture (933 patients, 28.8%)
+     2. Aortic aneurysm of unspecified site without mention of ruptu... (217 patients, 6.7%)
+     3. Abdominal aortic aneurysm, without rupture (217 patients, 6.7%)
+   Text characteristics:
+     Avg words per description: 6.0
+     Avg characters per description: 45.1
+     Contains 'HCC': 1,156 descriptions (35.6%)
+
+📋 Rheumatic Disease:
+   Patients: 3,121
+   Unique diagnostic descriptions: 123
+   Unique diagnostic codes: 53
+   Avg descriptions per code: 2.3
+   Top 3 diagnostic descriptions:
+     1. Rheumatoid arthritis(714.0) (1,036 patients, 33.2%)
+     2. Inflammatory arthritis (407 patients, 13.0%)
+     3. Rheumatoid arthritis, unspecified (250 patients, 8.0%)
+   Text characteristics:
+     Avg words per description: 3.7
+     Avg characters per description: 38.1
+     Contains 'HCC': 673 descriptions (21.6%)
+
+📋 Unspec Femoral Fracture:
+   Patients: 3,112
+   Unique diagnostic descriptions: 423
+   Unique diagnostic codes: 203
+   Avg descriptions per code: 2.1
+   Top 3 diagnostic descriptions:
+     1. Unspecified closed fracture of ankle (296 patients, 9.5%)
+     2. Closed fracture of lateral malleolus (255 patients, 8.2%)
+     3. Closed fracture of patella (128 patients, 4.1%)
+   Text characteristics:
+     Avg words per description: 7.8
+     Avg characters per description: 54.7
+     Contains 'HCC': 0 descriptions (0.0%)
+
+📋 Alcohol Abuse:
+   Patients: 3,005
+   Unique diagnostic descriptions: 135
+   Unique diagnostic codes: 39
+   Avg descriptions per code: 3.5
+   Top 3 diagnostic descriptions:
+     1. Alcohol abuse, uncomplicated (409 patients, 13.6%)
+     2. Alcohol abuse, unspecified (405 patients, 13.5%)
+     3. Alcohol abuse (241 patients, 8.0%)
+   Text characteristics:
+     Avg words per description: 3.8
+     Avg characters per description: 31.9
+     Contains 'HCC': 492 descriptions (16.4%)
+✅ Visualization saved: diagnostic_names_top_15_prevalent_analysis.png
+
+
+2. TOP 5 RAREST CONDITIONS - DIAGNOSTIC NAMES ANALYSIS
+===========================================================================
+
+📋 Parkinsons:
+   Patients: 1,100
+   Unique diagnostic descriptions: 43
+   Unique diagnostic codes: 8
+   Avg descriptions per code: 5.4
+   Top 3 diagnostic descriptions:
+     1. Paralysis agitans (HCC) (339 patients, 30.8%)
+     2. Parkinson's disease (289 patients, 26.3%)
+     3. Parkinson disease (HCC) (68 patients, 6.2%)
+   Text characteristics:
+     Avg words per description: 3.2
+     Avg characters per description: 27.3
+     Contains 'HCC': 769 descriptions (69.9%)
+
+📋 Rectosigmoid Cancer:
+   Patients: 563
+   Unique diagnostic descriptions: 14
+   Unique diagnostic codes: 1
+   Avg descriptions per code: 14.0
+   Top 3 diagnostic descriptions:
+     1. Malignant neoplasm of rectosigmoid junction (HCC) (497 patients, 88.3%)
+     2. Colorectal cancer (HCC) (24 patients, 4.3%)
+     3. Rectosigmoid cancer (HCC) (16 patients, 2.8%)
+   Text characteristics:
+     Avg words per description: 5.7
+     Avg characters per description: 46.7
+     Contains 'HCC': 560 descriptions (99.5%)
+
+📋 Rectal Cancer:
+   Patients: 512
+   Unique diagnostic descriptions: 11
+   Unique diagnostic codes: 1
+   Avg descriptions per code: 11.0
+   Top 3 diagnostic descriptions:
+     1. Malignant neoplasm of rectum (HCC) (311 patients, 60.7%)
+     2. Rectal cancer (HCC) (167 patients, 32.6%)
+     3. Rectal adenocarcinoma (HCC) (14 patients, 2.7%)
+   Text characteristics:
+     Avg words per description: 4.3
+     Avg characters per description: 28.8
+     Contains 'HCC': 512 descriptions (100.0%)
+
+📋 Chronic Hep C:
+   Patients: 475
+   Unique diagnostic descriptions: 12
+   Unique diagnostic codes: 2
+   Avg descriptions per code: 6.0
+   Top 3 diagnostic descriptions:
+     1. Chronic hepatitis C without mention of hepatic coma (249 patients, 52.4%)
+     2. Chronic viral hepatitis C (62 patients, 13.1%)
+     3. Hepatitis C carrier (HCC) (61 patients, 12.8%)
+   Text characteristics:
+     Avg words per description: 6.5
+     Avg characters per description: 41.5
+     Contains 'HCC': 164 descriptions (34.5%)
+
+📋 Bisphosphonate Use:
+   Patients: 98
+   Unique diagnostic descriptions: 10
+   Unique diagnostic codes: 1
+   Avg descriptions per code: 10.0
+   Top 3 diagnostic descriptions:
+     1. Long term (current) use of bisphosphonates (68 patients, 69.4%)
+     2. Gastrointestinal intolerance to bisphosphonates (7 patients, 7.1%)
+     3. Long term use of bisphosphonates (6 patients, 6.1%)
+   Text characteristics:
+     Avg words per description: 5.8
+     Avg characters per description: 42.7
+     Contains 'HCC': 0 descriptions (0.0%)
+✅ Visualization saved: diagnostic_names_rarest_5_analysis.png
+
+
+3. COMPARATIVE ANALYSIS: PREVALENT vs RARE CONDITIONS
+===========================================================================
+
+📊 COMPARATIVE STATISTICS:
+Metric                              Prevalent       Rare            Difference
+----------------------------------------------------------------------
+Avg patients per condition          13491           550             +12941
+Avg unique descriptions             182             18              +164
+Avg words per description           6               5               +1
+Avg chars per description           45              37              +8
+% with HCC designation              9.8             60.8            -51.0
+Description diversity ratio         1.3             3.3             -1.9
+✅ Comparative visualization saved: diagnostic_names_comparative.png
+
+📋 KEY INSIGHTS:
+   • Prevalent conditions have 24.5x more patients on average
+   • Rare conditions have 0.1x more diagnostic diversity
+   • HCC designation is 0.2x more common in prevalent conditions
+
+✅ ANALYSIS COMPLETE!
+📁 Generated visualizations:
+   • diagnostic_names_top15_analysis.png
+   • diagnostic_names_rare_analysis.png
+   • diagnostic_names_comparative.png
+   • diagnostic_wordclouds.png
