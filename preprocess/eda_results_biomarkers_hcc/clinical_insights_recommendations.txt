@@ -1,0 +1,41 @@
+CLINICAL INSIGHTS AND RECOMMENDATIONS
+Biomarkers with HCC Codes Dataset Analysis
+============================================================
+Generated: 2025-09-11 19:49:35
+
+=== DATASET OVERVIEW INSIGHTS ===
+• Dataset contains 23,510 patient records with 301 variables
+• Comprehensive integration of CT biomarkers, clinical outcomes, and HCC comorbidity codes
+• Average patient age: 55.8 years
+• Sex distribution: {'Female': 56.754572522330925, 'Male': 43.2284134410889, 'Unknown': 0.017014036580178648}
+• Overall mortality rate: 11.40%
+• Average HCC comorbidity burden: 1.8 conditions per patient
+• Maximum HCC burden: 24 conditions in a single patient
+• Top 5 most prevalent HCC codes:
+  - HCC_108: 22.6%
+  - HCC_19: 13.0%
+  - HCC_12: 10.9%
+  - HCC_85: 9.9%
+  - HCC_48: 9.8%
+• 37 quantitative CT biomarkers available
+• 32 biomarkers have >50% missing data
+• Top 5 most prevalent clinical diagnoses:
+  - essential_HTN: 53.7%
+  - Type_2_Diabetes: 44.7%
+  - Impaired_glucose: 38.0%
+  - Tobacco_use: 26.8%
+  - MI: 23.1%
+
+=== CLINICAL RESEARCH RECOMMENDATIONS ===
+• Consider stratifying analyses by age groups and sex due to demographic variations
+• HCC codes provide rich comorbidity information for risk stratification
+• High missing data rates in some biomarkers may require imputation strategies
+• Integration of longitudinal lab values (HbA1c, CRP) enables temporal analysis
+• Patient clustering reveals distinct phenotypic subgroups for personalized medicine
+• Strong correlations between biomarkers suggest potential for dimensionality reduction
+
+=== DATA QUALITY RECOMMENDATIONS ===
+• 148 columns have >50% missing data - consider exclusion or imputation
+• Validate HCC code assignments against clinical documentation
+• Consider temporal relationships between CT scan dates and clinical outcomes
+• Implement data quality checks for outlier biomarker values
