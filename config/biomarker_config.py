@@ -1,314 +1,486 @@
 """
-Biomarker Configuration System
-Allows flexible specification of binary, multiclass, and continuous biomarkers
+Flexible Biomarker Configuration System
+Supports dynamic task configuration without hardcoded assumptions
 """
 
-from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
-import json
 import yaml
+import json
+from dataclasses import dataclass, field
+from typing import List, Dict, Any, Optional, Tuple
+import pandas as pd
+import numpy as np
 
 
 @dataclass
 class BinaryBiomarker:
-    """Configuration for binary classification biomarker"""
+    """Configuration for a binary classification task"""
     name: str
-    positive_class: str = "PRESENT"
+    description: str
+    positive_class: str
     negative_class: str = "ABSENT"
     class_weight: Optional[float] = None
-    
-    def __post_init__(self):
-        if self.class_weight is None:
-            self.class_weight = 1.0
 
 
-@dataclass
-class MultiClassBiomarker:
-    """Configuration for multiclass biomarker"""
+@dataclass  
+class MulticlassBiomarker:
+    """Configuration for a multiclass classification task"""
     name: str
-    classes: List[str]  # e.g., ["ABSENT", "LOW", "MEDIUM", "HIGH"]
+    description: str
+    classes: List[str]
     class_weights: Optional[Dict[str, float]] = None
-    
-    def __post_init__(self):
-        if self.class_weights is None:
-            self.class_weights = {cls: 1.0 for cls in self.classes}
-        
-        # Ensure all classes have weights
-        for cls in self.classes:
-            if cls not in self.class_weights:
-                self.class_weights[cls] = 1.0
-    
-    @property
-    def num_classes(self) -> int:
-        return len(self.classes)
-    
-    def class_to_index(self, class_name: str) -> int:
-        """Convert class name to index"""
-        try:
-            return self.classes.index(class_name)
-        except ValueError:
-            raise ValueError(f"Unknown class '{class_name}' for biomarker '{self.name}'. "
-                           f"Available classes: {self.classes}")
-    
-    def index_to_class(self, index: int) -> str:
-        """Convert index to class name"""
-        if 0 <= index < len(self.classes):
-            return self.classes[index]
-        else:
-            raise ValueError(f"Index {index} out of range for biomarker '{self.name}'. "
-                           f"Valid range: 0-{len(self.classes)-1}")
 
 
 @dataclass
 class ContinuousBiomarker:
-    """Configuration for continuous/regression biomarker"""
+    """Configuration for a regression task"""
     name: str
-    normalization_factor: float = 1.0
-    min_value: Optional[float] = None
-    max_value: Optional[float] = None
+    description: str
+    min_value: float
+    max_value: float
+    normalization: str = "min_max"  # "min_max", "z_score", or "none"
     
     def normalize(self, value: float) -> float:
-        """Normalize the continuous value"""
-        return float(value) / self.normalization_factor
-    
-    def denormalize(self, normalized_value: float) -> float:
-        """Denormalize the continuous value"""
-        return normalized_value * self.normalization_factor
+        """Normalize a continuous value based on the configured normalization method"""
+        if self.normalization == "min_max":
+            # Min-max normalization to [0, 1]
+            return (value - self.min_value) / (self.max_value - self.min_value)
+        elif self.normalization == "z_score":
+            # Z-score normalization (would need mean and std, using min_max for now)
+            return (value - self.min_value) / (self.max_value - self.min_value)
+        elif self.normalization == "none":
+            # No normalization
+            return value
+        else:
+            # Default to min_max
+            return (value - self.min_value) / (self.max_value - self.min_value)
 
 
 @dataclass
-class BiomarkerConfig:
-    """Complete biomarker configuration"""
-    binary_biomarkers: List[BinaryBiomarker]
-    multiclass_biomarkers: List[MultiClassBiomarker]
-    continuous_biomarkers: List[ContinuousBiomarker]
+class TensorLayout:
+    """Describes where each biomarker appears in the output tensor"""
+    biomarker_name: str
+    start_idx: int
+    end_idx: int
+    size: int
+    task_type: str  # "binary", "multiclass", "continuous"
+
+
+class FlexibleBiomarkerConfig:
+    """Flexible biomarker configuration that adapts to any task structure"""
     
-    def __post_init__(self):
-        # Validate no duplicate names
-        all_names = []
-        for biomarker in self.binary_biomarkers:
-            all_names.append(biomarker.name)
-        for biomarker in self.multiclass_biomarkers:
-            all_names.append(biomarker.name)
-        for biomarker in self.continuous_biomarkers:
-            all_names.append(biomarker.name)
+    def __init__(self, config_path: Optional[str] = None):
+        self.experiment_name: str = ""
+        self.description: str = ""
+        self.binary_biomarkers: List[BinaryBiomarker] = []
+        self.multiclass_biomarkers: List[MulticlassBiomarker] = []
+        self.continuous_biomarkers: List[ContinuousBiomarker] = []
+        self.preprocessing: Dict[str, Any] = {}
+        self.training: Dict[str, Any] = {}
+        self.validation: Dict[str, Any] = {}
         
-        if len(all_names) != len(set(all_names)):
-            duplicates = [name for name in set(all_names) if all_names.count(name) > 1]
-            raise ValueError(f"Duplicate biomarker names found: {duplicates}")
+        if config_path:
+            self.load_from_file(config_path)
+    
+    def load_from_file(self, config_path: str):
+        """Load configuration from YAML or JSON file"""
+        if config_path.endswith('.yaml') or config_path.endswith('.yml'):
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
+        elif config_path.endswith('.json'):
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
+        else:
+            raise ValueError(f"Unsupported config file format: {config_path}")
+        
+        self._parse_config(config_data)
+    
+    def _parse_config(self, config_data: Dict[str, Any]):
+        """Parse configuration data"""
+        self.experiment_name = config_data.get('experiment_name', '')
+        self.description = config_data.get('description', '')
+        
+        # Parse binary biomarkers
+        binary_data = config_data.get('binary_biomarkers', [])
+        self.binary_biomarkers = [
+            BinaryBiomarker(
+                name=b['name'],
+                description=b['description'],
+                positive_class=b['positive_class'],
+                negative_class=b.get('negative_class', 'ABSENT'),
+                class_weight=b.get('class_weight')
+            )
+            for b in binary_data
+        ]
+        
+        # Parse multiclass biomarkers
+        multiclass_data = config_data.get('multiclass_biomarkers', [])
+        self.multiclass_biomarkers = [
+            MulticlassBiomarker(
+                name=m['name'],
+                description=m['description'],
+                classes=m['classes'],
+                class_weights=m.get('class_weights')
+            )
+            for m in multiclass_data
+        ]
+        
+        # Parse continuous biomarkers
+        continuous_data = config_data.get('continuous_biomarkers', [])
+        self.continuous_biomarkers = [
+            ContinuousBiomarker(
+                name=c['name'],
+                description=c['description'],
+                min_value=c['min_value'],
+                max_value=c['max_value'],
+                normalization=c.get('normalization', 'min_max')
+            )
+            for c in continuous_data
+        ]
+        
+        # Parse other settings
+        self.preprocessing = config_data.get('preprocessing', {})
+        self.training = config_data.get('training', {})
+        self.validation = config_data.get('validation', {})
+    
+    @property
+    def num_binary_tasks(self) -> int:
+        """Number of binary classification tasks"""
+        return len(self.binary_biomarkers)
+    
+    @property
+    def num_multiclass_tasks(self) -> int:
+        """Number of multiclass classification tasks"""
+        return len(self.multiclass_biomarkers)
+    
+    @property
+    def num_continuous_tasks(self) -> int:
+        """Number of regression tasks"""
+        return len(self.continuous_biomarkers)
+    
+    @property
+    def total_multiclass_outputs(self) -> int:
+        """Total outputs needed for all multiclass tasks"""
+        return sum(len(m.classes) for m in self.multiclass_biomarkers)
     
     @property
     def total_output_size(self) -> int:
-        """Calculate total output tensor size"""
-        size = 0
-        size += len(self.binary_biomarkers)  # Binary tasks
-        for mc_biomarker in self.multiclass_biomarkers:
-            size += mc_biomarker.num_classes  # Multiclass one-hot
-        size += len(self.continuous_biomarkers)  # Continuous tasks
-        return size
+        """Total size of output tensor"""
+        return (self.num_binary_tasks + 
+                self.total_multiclass_outputs + 
+                self.num_continuous_tasks)
     
-    @property
-    def all_biomarker_names(self) -> List[str]:
-        """Get all biomarker names"""
-        names = []
-        names.extend([b.name for b in self.binary_biomarkers])
-        names.extend([b.name for b in self.multiclass_biomarkers])
-        names.extend([b.name for b in self.continuous_biomarkers])
-        return names
-    
-    def get_tensor_layout(self) -> Dict[str, Dict[str, Any]]:
-        """Get the layout of the output tensor"""
+    def get_tensor_layout(self) -> Dict[str, TensorLayout]:
+        """Get the layout of biomarkers in the output tensor"""
         layout = {}
         current_idx = 0
         
-        # Binary biomarkers
+        # Binary biomarkers (1 output each)
         for biomarker in self.binary_biomarkers:
-            layout[biomarker.name] = {
-                'type': 'binary',
-                'start_idx': current_idx,
-                'end_idx': current_idx + 1,
-                'size': 1
-            }
+            layout[biomarker.name] = TensorLayout(
+                biomarker_name=biomarker.name,
+                start_idx=current_idx,
+                end_idx=current_idx + 1,
+                size=1,
+                task_type="binary"
+            )
             current_idx += 1
         
-        # Multiclass biomarkers
+        # Multiclass biomarkers (n outputs each)
         for biomarker in self.multiclass_biomarkers:
-            layout[biomarker.name] = {
-                'type': 'multiclass',
-                'start_idx': current_idx,
-                'end_idx': current_idx + biomarker.num_classes,
-                'size': biomarker.num_classes,
-                'classes': biomarker.classes
-            }
-            current_idx += biomarker.num_classes
+            num_classes = len(biomarker.classes)
+            layout[biomarker.name] = TensorLayout(
+                biomarker_name=biomarker.name,
+                start_idx=current_idx,
+                end_idx=current_idx + num_classes,
+                size=num_classes,
+                task_type="multiclass"
+            )
+            current_idx += num_classes
         
-        # Continuous biomarkers
+        # Continuous biomarkers (1 output each)
         for biomarker in self.continuous_biomarkers:
-            layout[biomarker.name] = {
-                'type': 'continuous',
-                'start_idx': current_idx,
-                'end_idx': current_idx + 1,
-                'size': 1,
-                'normalization_factor': biomarker.normalization_factor
-            }
+            layout[biomarker.name] = TensorLayout(
+                biomarker_name=biomarker.name,
+                start_idx=current_idx,
+                end_idx=current_idx + 1,
+                size=1,
+                task_type="continuous"
+            )
             current_idx += 1
         
         return layout
     
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization"""
-        return {
+    def get_all_biomarker_names(self) -> List[str]:
+        """Get names of all biomarkers"""
+        names = []
+        names.extend([b.name for b in self.binary_biomarkers])
+        names.extend([m.name for m in self.multiclass_biomarkers])
+        names.extend([c.name for c in self.continuous_biomarkers])
+        return names
+    
+    def validate_dataset_compatibility(self, df: pd.DataFrame) -> Tuple[bool, List[str]]:
+        """Check if dataset has all required biomarker columns"""
+        required_columns = self.get_all_biomarker_names()
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        
+        is_compatible = len(missing_columns) == 0
+        return is_compatible, missing_columns
+    
+    def prepare_targets_tensor(self, df: pd.DataFrame, indices: Optional[List[int]] = None) -> np.ndarray:
+        """
+        Convert dataframe rows to target tensors for training
+        
+        Args:
+            df: DataFrame with biomarker columns
+            indices: Optional list of row indices to process (if None, process all)
+            
+        Returns:
+            numpy array of shape [num_samples, total_output_size]
+        """
+        if indices is None:
+            indices = list(range(len(df)))
+        
+        num_samples = len(indices)
+        targets = np.zeros((num_samples, self.total_output_size))
+        layout = self.get_tensor_layout()
+        
+        for i, row_idx in enumerate(indices):
+            row = df.iloc[row_idx]
+            
+            # Process binary biomarkers
+            for biomarker in self.binary_biomarkers:
+                tensor_info = layout[biomarker.name]
+                value = row[biomarker.name]
+                
+                # Convert to binary (1 if positive_class, 0 otherwise)
+                if pd.isna(value):
+                    binary_value = 0.0  # Default to negative class for missing values
+                elif str(value).upper() == biomarker.positive_class.upper():
+                    binary_value = 1.0
+                elif str(value).upper() == "MALE" and biomarker.positive_class.upper() == "MALE":
+                    binary_value = 1.0
+                elif str(value).upper() == "FEMALE" and biomarker.positive_class.upper() == "MALE":
+                    binary_value = 0.0
+                else:
+                    binary_value = 0.0
+                
+                targets[i, tensor_info.start_idx] = binary_value
+            
+            # Process multiclass biomarkers
+            for biomarker in self.multiclass_biomarkers:
+                tensor_info = layout[biomarker.name]
+                value = str(row[biomarker.name]).upper()
+                
+                # Create one-hot encoding
+                class_idx = -1
+                for j, class_name in enumerate(biomarker.classes):
+                    if value == class_name.upper():
+                        class_idx = j
+                        break
+                
+                if class_idx >= 0:
+                    targets[i, tensor_info.start_idx + class_idx] = 1.0
+                # If no match found, leave as zeros (unknown class)
+            
+            # Process continuous biomarkers
+            for biomarker in self.continuous_biomarkers:
+                tensor_info = layout[biomarker.name]
+                value = row[biomarker.name]
+                
+                if pd.isna(value):
+                    normalized_value = 0.0  # Default for missing values
+                else:
+                    # Normalize based on specified method
+                    if biomarker.normalization == "min_max":
+                        normalized_value = (float(value) - biomarker.min_value) / (biomarker.max_value - biomarker.min_value)
+                        normalized_value = np.clip(normalized_value, 0.0, 1.0)  # Ensure [0, 1] range
+                    elif biomarker.normalization == "z_score":
+                        # Would need mean/std from training data for proper z-score normalization
+                        normalized_value = float(value)
+                    else:  # no normalization
+                        normalized_value = float(value)
+                
+                targets[i, tensor_info.start_idx] = normalized_value
+        
+        return targets
+    
+    def denormalize_continuous_predictions(self, predictions: np.ndarray) -> Dict[str, np.ndarray]:
+        """Convert normalized continuous predictions back to original scale"""
+        layout = self.get_tensor_layout()
+        denormalized = {}
+        
+        for biomarker in self.continuous_biomarkers:
+            tensor_info = layout[biomarker.name]
+            normalized_preds = predictions[:, tensor_info.start_idx]
+            
+            if biomarker.normalization == "min_max":
+                original_preds = (normalized_preds * (biomarker.max_value - biomarker.min_value)) + biomarker.min_value
+            else:
+                original_preds = normalized_preds
+            
+            denormalized[biomarker.name] = original_preds
+        
+        return denormalized
+    
+    def save_to_file(self, file_path: str):
+        """Save configuration to file"""
+        config_data = {
+            'experiment_name': self.experiment_name,
+            'description': self.description,
             'binary_biomarkers': [
                 {
                     'name': b.name,
+                    'description': b.description,
                     'positive_class': b.positive_class,
-                    'negative_class': b.negative_class,
-                    'class_weight': b.class_weight
-                } for b in self.binary_biomarkers
+                    'negative_class': b.negative_class
+                }
+                for b in self.binary_biomarkers
             ],
             'multiclass_biomarkers': [
                 {
-                    'name': b.name,
-                    'classes': b.classes,
-                    'class_weights': b.class_weights
-                } for b in self.multiclass_biomarkers
+                    'name': m.name,
+                    'description': m.description,
+                    'classes': m.classes
+                }
+                for m in self.multiclass_biomarkers
             ],
             'continuous_biomarkers': [
                 {
-                    'name': b.name,
-                    'normalization_factor': b.normalization_factor,
-                    'min_value': b.min_value,
-                    'max_value': b.max_value
-                } for b in self.continuous_biomarkers
-            ]
+                    'name': c.name,
+                    'description': c.description,
+                    'min_value': c.min_value,
+                    'max_value': c.max_value,
+                    'normalization': c.normalization
+                }
+                for c in self.continuous_biomarkers
+            ],
+            'preprocessing': self.preprocessing,
+            'training': self.training,
+            'validation': self.validation
         }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'BiomarkerConfig':
-        """Create from dictionary"""
-        binary_biomarkers = [
-            BinaryBiomarker(**b) for b in data.get('binary_biomarkers', [])
-        ]
-        multiclass_biomarkers = [
-            MultiClassBiomarker(**b) for b in data.get('multiclass_biomarkers', [])
-        ]
-        continuous_biomarkers = [
-            ContinuousBiomarker(**b) for b in data.get('continuous_biomarkers', [])
-        ]
         
-        return cls(binary_biomarkers, multiclass_biomarkers, continuous_biomarkers)
+        if file_path.endswith('.yaml') or file_path.endswith('.yml'):
+            with open(file_path, 'w') as f:
+                yaml.dump(config_data, f, default_flow_style=False, indent=2)
+        elif file_path.endswith('.json'):
+            with open(file_path, 'w') as f:
+                json.dump(config_data, f, indent=2)
+        else:
+            raise ValueError(f"Unsupported file format: {file_path}")
     
-    def save_to_json(self, filepath: str):
-        """Save configuration to JSON file"""
-        with open(filepath, 'w') as f:
-            json.dump(self.to_dict(), f, indent=2)
-    
-    def save_to_yaml(self, filepath: str):
-        """Save configuration to YAML file"""
-        with open(filepath, 'w') as f:
-            yaml.dump(self.to_dict(), f, default_flow_style=False, indent=2)
-    
-    @classmethod
-    def load_from_json(cls, filepath: str) -> 'BiomarkerConfig':
-        """Load configuration from JSON file"""
-        with open(filepath, 'r') as f:
-            data = json.load(f)
-        return cls.from_dict(data)
-    
-    @classmethod
-    def load_from_yaml(cls, filepath: str) -> 'BiomarkerConfig':
-        """Load configuration from YAML file"""
-        with open(filepath, 'r') as f:
-            data = yaml.safe_load(f)
-        return cls.from_dict(data)
+    def print_summary(self):
+        """Print a summary of the configuration"""
+        print(f"Experiment: {self.experiment_name}")
+        print(f"Description: {self.description}")
+        print(f"\nTask Configuration:")
+        print(f"  Binary tasks: {self.num_binary_tasks}")
+        print(f"  Multiclass tasks: {self.num_multiclass_tasks}")
+        print(f"  Continuous tasks: {self.num_continuous_tasks}")
+        print(f"  Total output size: {self.total_output_size}")
+        
+        print(f"\nBinary Biomarkers:")
+        for b in self.binary_biomarkers:
+            print(f"  - {b.name}: {b.description}")
+        
+        if self.multiclass_biomarkers:
+            print(f"\nMulticlass Biomarkers:")
+            for m in self.multiclass_biomarkers:
+                print(f"  - {m.name}: {m.description} ({len(m.classes)} classes)")
+        
+        print(f"\nContinuous Biomarkers:")
+        for c in self.continuous_biomarkers:
+            print(f"  - {c.name}: {c.description} (range: {c.min_value}-{c.max_value})")
+        
+        print(f"\nTensor Layout:")
+        layout = self.get_tensor_layout()
+        for name, info in layout.items():
+            print(f"  {name}: indices {info.start_idx}-{info.end_idx-1} (size: {info.size}, type: {info.task_type})")
 
 
-# Default configuration matching current system
-def get_default_biomarker_config() -> BiomarkerConfig:
-    """Get the default biomarker configuration matching current hardcoded setup"""
+def create_comorbidities_config() -> FlexibleBiomarkerConfig:
+    """Create the comorbidities detection configuration programmatically"""
+    config = FlexibleBiomarkerConfig()
     
-    binary_biomarkers = [
-        BinaryBiomarker(name='HCC18'),
-        BinaryBiomarker(name='HCC22'),
-        BinaryBiomarker(name='HCC85'),
-        BinaryBiomarker(name='HCC96'),
-        BinaryBiomarker(name='HCC108'),
-        BinaryBiomarker(name='HCC111'),
+    config.experiment_name = "comorbidities_detection"
+    config.description = "Multi-task learning for comorbidity detection from CT scans"
+    
+    # Binary biomarkers
+    binary_names = [
+        ("GENDER", "Patient gender (male=1, female=0)", "male"),
+        ("MORTALITY", "Death status", "PRESENT"),
+        ("HCC12", "HCC code 12", "PRESENT"),
+        ("HCC18", "HCC code 18", "PRESENT"),
+        ("HCC19", "HCC code 19", "PRESENT"),
+        ("HCC22", "HCC code 22", "PRESENT"),
+        ("HCC48", "HCC code 48", "PRESENT"),
+        ("HCC85", "HCC code 85", "PRESENT"),
+        ("HCC96", "HCC code 96", "PRESENT"),
+        ("HCC108", "HCC code 108", "PRESENT"),
+        ("HCC111", "HCC code 111", "PRESENT"),
+        ("CALCIUMSCORING_ABDOMINALAGATSTON_BINARY", "High calcium score indicator (>1000)", "PRESENT")
     ]
     
-    multiclass_biomarkers = [
-        MultiClassBiomarker(
-            name='CalciumScoring_AbdominalAgatston',
-            classes=['ABSENT', 'LOW', 'MEDIUM', 'HIGH']
+    config.binary_biomarkers = [
+        BinaryBiomarker(name=name, description=desc, positive_class=pos_class)
+        for name, desc, pos_class in binary_names
+    ]
+    
+    # No multiclass biomarkers for this configuration
+    config.multiclass_biomarkers = []
+    
+    # Continuous biomarkers
+    config.continuous_biomarkers = [
+        ContinuousBiomarker(
+            name="AGE",
+            description="Patient age in years",
+            min_value=18,
+            max_value=102,
+            normalization="min_max"
         )
     ]
     
-    continuous_biomarkers = [
-        ContinuousBiomarker(name='AGE', normalization_factor=101.0),
-        ContinuousBiomarker(name='RAF', normalization_factor=50.0)
-    ]
+    # Settings
+    config.preprocessing = {
+        "image_size": 256,
+        "normalize_images": True,
+        "convert_to_rgb": True
+    }
     
-    return BiomarkerConfig(binary_biomarkers, multiclass_biomarkers, continuous_biomarkers)
-
-
-# Create example configurations
-def create_example_configs():
-    """Create example configuration files"""
+    config.training = {
+        "class_weighting": True,
+        "balanced_sampling": False
+    }
     
-    # Default configuration
-    default_config = get_default_biomarker_config()
-    default_config.save_to_yaml('biomarker_config_default.yaml')
-    default_config.save_to_json('biomarker_config_default.json')
+    config.validation = {
+        "binary_threshold": 0.5,
+        "metrics": ["auroc", "accuracy", "sensitivity", "specificity", "f1_score"],
+        "regression_metrics": ["mse", "mae", "r2_score"]
+    }
     
-    # Custom example configuration
-    custom_config = BiomarkerConfig(
-        binary_biomarkers=[
-            BinaryBiomarker(name='HCC18', class_weight=2.0),
-            BinaryBiomarker(name='HCC22', class_weight=1.5),
-            BinaryBiomarker(name='Diabetes', positive_class='YES', negative_class='NO'),
-        ],
-        multiclass_biomarkers=[
-            MultiClassBiomarker(
-                name='Severity',
-                classes=['MILD', 'MODERATE', 'SEVERE'],
-                class_weights={'MILD': 1.0, 'MODERATE': 1.5, 'SEVERE': 2.0}
-            ),
-            MultiClassBiomarker(
-                name='Stage',
-                classes=['I', 'II', 'III', 'IV']
-            )
-        ],
-        continuous_biomarkers=[
-            ContinuousBiomarker(name='AGE', normalization_factor=100.0, min_value=0, max_value=120),
-            ContinuousBiomarker(name='BMI', normalization_factor=50.0, min_value=10, max_value=60),
-            ContinuousBiomarker(name='BloodPressure', normalization_factor=200.0)
-        ]
-    )
-    
-    custom_config.save_to_yaml('biomarker_config_example.yaml')
-    custom_config.save_to_json('biomarker_config_example.json')
-    
-    print("Example configuration files created:")
-    print("- biomarker_config_default.yaml")
-    print("- biomarker_config_default.json")
-    print("- biomarker_config_example.yaml")
-    print("- biomarker_config_example.json")
+    return config
 
 
 if __name__ == "__main__":
-    # Test the configuration system
-    config = get_default_biomarker_config()
+    # Test the configuration
+    config = create_comorbidities_config()
+    config.print_summary()
     
-    print("Default Biomarker Configuration:")
-    print(f"Total output size: {config.total_output_size}")
-    print(f"All biomarkers: {config.all_biomarker_names}")
+    # Test with sample data
+    sample_data = {
+        'GENDER': ['male', 'female', 'male'],
+        'MORTALITY': ['ABSENT', 'PRESENT', 'ABSENT'],
+        'HCC12': ['ABSENT', 'ABSENT', 'PRESENT'],
+        'AGE': [45, 67, 52]
+    }
     
-    print("\nTensor Layout:")
-    layout = config.get_tensor_layout()
-    for name, info in layout.items():
-        print(f"  {name}: {info}")
+    df = pd.DataFrame(sample_data)
     
-    # Create example files
-    create_example_configs()
-
-
+    # Add missing columns with default values
+    for biomarker in config.binary_biomarkers:
+        if biomarker.name not in df.columns:
+            df[biomarker.name] = 'ABSENT'
+    
+    print(f"\nSample tensor conversion:")
+    targets = config.prepare_targets_tensor(df)
+    print(f"Input shape: {targets.shape}")
+    print(f"Sample targets:\n{targets}")

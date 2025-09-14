@@ -28,8 +28,10 @@ from .resnet34 import ResNet34
 from .cc_resnet import resnet34
 
 
+# Legacy MultiTaskHead - kept for backward compatibility
+# Use FlexibleMultiTaskHead for new experiments
 class MultiTaskHead(nn.Module):
-    """Multi-task head for comorbidity detection"""
+    """Legacy multi-task head for comorbidity detection - use FlexibleMultiTaskHead instead"""
     
     def __init__(self, input_dim, num_binary_tasks=7, num_calcium_classes=4, 
                  num_regression_tasks=2, dropout=0.1):
@@ -68,25 +70,26 @@ class ModelFactory:
     
     @staticmethod
     def create_model(architecture, num_classes=13, pretrained_weights=None, 
-                    fine_tuning_strategy="full", dropout=0.1, **kwargs):
+                    fine_tuning_strategy="full", dropout=0.1, biomarker_config=None, **kwargs):
         """
         Create model based on architecture specification
         
         Args:
             architecture: Model architecture name
-            num_classes: Total number of output classes (7 binary + 4 calcium + 2 regression)
+            num_classes: Total number of output classes (flexible based on biomarker_config)
             pretrained_weights: Pretrained weights source
             fine_tuning_strategy: 'full', 'linear_probe', or 'partial'
             dropout: Dropout rate
+            biomarker_config: FlexibleBiomarkerConfig instance (if None, uses legacy MultiTaskHead)
         """
         
         if architecture == "ResNet-18":
             return ModelFactory._create_resnet18(num_classes, pretrained_weights, 
-                                                fine_tuning_strategy, dropout)
+                                                fine_tuning_strategy, dropout, biomarker_config)
         
         elif architecture == "ResNet-34":
             return ModelFactory._create_resnet34(num_classes, pretrained_weights, 
-                                                fine_tuning_strategy, dropout)
+                                                fine_tuning_strategy, dropout, biomarker_config)
         
         elif architecture == "DenseNet-121":
             return ModelFactory._create_densenet121(num_classes, pretrained_weights, 
@@ -149,7 +152,18 @@ class ModelFactory:
             raise ValueError(f"Unsupported architecture: {architecture}")
     
     @staticmethod
-    def _create_resnet18(num_classes, pretrained_weights, fine_tuning_strategy, dropout):
+    def _create_multitask_head(feature_dim, dropout, biomarker_config):
+        """Create appropriate multi-task head based on configuration"""
+        if biomarker_config is not None:
+            # Use flexible multi-task head
+            from .flexible_multitask_head import FlexibleMultiTaskHead
+            return FlexibleMultiTaskHead(feature_dim, biomarker_config, dropout=dropout)
+        else:
+            # Use legacy multi-task head for backward compatibility
+            return MultiTaskHead(feature_dim, dropout=dropout)
+    
+    @staticmethod
+    def _create_resnet18(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config):
         if pretrained_weights == "ImageNet":
             model = models.resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
             # Keep 3-channel input for pretrained weights, we'll convert images to 3-channel
@@ -158,9 +172,9 @@ class ModelFactory:
             # For non-pretrained, we can use single channel
             model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
-        # Replace classifier with multi-task head
+        # Replace classifier with flexible multi-task head
         feature_dim = model.fc.in_features
-        model.fc = MultiTaskHead(feature_dim, dropout=dropout)
+        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -171,15 +185,23 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_resnet34(num_classes, pretrained_weights, fine_tuning_strategy, dropout):
+    def _create_resnet34(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config):
         if pretrained_weights == "ImageNet":
             model = models.resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
             # Keep 3-channel input for pretrained weights
             feature_dim = model.fc.in_features
-            model.fc = MultiTaskHead(feature_dim, dropout=dropout)
+            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
         else:
-            # Use existing custom ResNet34
-            model = ResNet34(num_classes=num_classes)
+            # Use existing custom ResNet34 with flexible head
+            if biomarker_config is not None:
+                # Create model without final classifier, then add flexible head
+                model = ResNet34(num_classes=1)  # Temporary
+                # Replace with flexible head
+                feature_dim = model.fc.in_features if hasattr(model, 'fc') else 512
+                model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
+            else:
+                # Legacy behavior
+                model = ResNet34(num_classes=num_classes)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():

@@ -87,6 +87,50 @@ class ExperimentConfig:
         
         return f"{model_clean}_{lr_str}_{batch_str}{ft_suffix}_{timestamp}"
     
+    def generate_lr_experiments(self) -> List['ExperimentConfig']:
+        """Generate individual experiment configs for each learning rate"""
+        if len(self.learning_rate) <= 1:
+            return [self]
+        
+        experiments = []
+        for lr in self.learning_rate:
+            # Create a copy of the current config
+            import copy
+            config_copy = copy.deepcopy(self)
+            
+            # Set single learning rate
+            config_copy.learning_rate = [lr]
+            
+            # Generate new experiment name with specific learning rate
+            config_copy.experiment_name = config_copy._generate_experiment_name_with_lr(lr)
+            
+            experiments.append(config_copy)
+        
+        return experiments
+    
+    def _generate_experiment_name_with_lr(self, lr: float) -> str:
+        """Generate experiment name for specific learning rate"""
+        import datetime
+        
+        # Clean model name for filename
+        model_clean = self.model.replace('/', '_').replace(' ', '_').replace('(', '').replace(')', '')
+        
+        # Format learning rate nicely
+        lr_str = f"lr{lr:.0e}"
+        batch_str = f"bs{self.batch_size}"
+        
+        # Add fine-tuning strategy if relevant
+        ft_suffix = ""
+        if "frozen" in self.fine_tuning_strategy.lower() or "probe" in self.fine_tuning_strategy.lower():
+            ft_suffix = "_frozen"
+        elif "partial" in self.fine_tuning_strategy.lower():
+            ft_suffix = "_partial"
+        
+        # Add timestamp to ensure uniqueness
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        return f"{model_clean}_{lr_str}_{batch_str}{ft_suffix}_{timestamp}"
+    
     def get_output_directory(self, base_dir: str) -> str:
         """Get the output directory for this experiment"""
         if self.output_dir:
@@ -96,11 +140,15 @@ class ExperimentConfig:
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert configuration to dictionary"""
+        # For individual experiments (single learning rate), save as single value
+        # For base configs (multiple learning rates), save as array
+        learning_rate_value = self.learning_rate[0] if len(self.learning_rate) == 1 else self.learning_rate
+        
         return {
             'model': self.model,
             'loss_function': self.loss_function,
             'must_include': self.must_include,
-            'learning_rate': self.learning_rate,
+            'learning_rate': learning_rate_value,
             'batch_size': self.batch_size,
             'weight_decay': self.weight_decay,
             'optimizer': self.optimizer,
@@ -158,6 +206,12 @@ class ExperimentConfigLoader:
                     sampling_strategy=row['Sampling_Strategy'],
                     threshold_selection=row['Threshold_Selection']
                 )
+                
+                # Add Turing1 compatibility if column exists
+                if 'Turing1' in row and not pd.isna(row['Turing1']):
+                    config.turing1_compatible = row['Turing1'] == 'Yes'
+                else:
+                    config.turing1_compatible = True  # Default to compatible
                 configs.append(config)
                 
             except Exception as e:
@@ -166,6 +220,51 @@ class ExperimentConfigLoader:
                 continue
         
         return configs
+    
+    def load_all_configs_with_lr_expansion(self) -> List[ExperimentConfig]:
+        """Load all configurations and expand learning rate hyperparameter search"""
+        base_configs = self.load_all_configs()
+        expanded_configs = []
+        
+        for config in base_configs:
+            # Expand each config into individual learning rate experiments
+            lr_experiments = config.generate_lr_experiments()
+            expanded_configs.extend(lr_experiments)
+        
+        return expanded_configs
+    
+    def load_must_include_configs_with_lr_expansion(self) -> List[ExperimentConfig]:
+        """Load must-include configurations and expand learning rate hyperparameter search"""
+        base_configs = self.load_must_include_configs()
+        expanded_configs = []
+        
+        for config in base_configs:
+            # Expand each config into individual learning rate experiments
+            lr_experiments = config.generate_lr_experiments()
+            expanded_configs.extend(lr_experiments)
+        
+        return expanded_configs
+    
+    def load_turing1_compatible_configs(self) -> List[ExperimentConfig]:
+        """Load only configurations compatible with Turing1 GPUs"""
+        all_configs = self.load_all_configs()
+        return [config for config in all_configs if getattr(config, 'turing1_compatible', True)]
+    
+    def load_turing1_must_include_configs(self) -> List[ExperimentConfig]:
+        """Load must-include configurations compatible with Turing1 GPUs"""
+        must_include_configs = self.load_must_include_configs()
+        return [config for config in must_include_configs if getattr(config, 'turing1_compatible', True)]
+    
+    def load_turing1_must_include_with_lr_expansion(self) -> List[ExperimentConfig]:
+        """Load must-include Turing1-compatible configs with learning rate expansion"""
+        base_configs = self.load_turing1_must_include_configs()
+        expanded_configs = []
+        
+        for config in base_configs:
+            lr_experiments = config.generate_lr_experiments()
+            expanded_configs.extend(lr_experiments)
+        
+        return expanded_configs
     
     def load_must_include_configs(self) -> List[ExperimentConfig]:
         """Load only configurations marked as 'Must Include'"""

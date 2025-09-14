@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from PIL import Image
 
 from utils.labels import *
-from config.biomarker_config import BiomarkerConfig
+from config.biomarker_config import FlexibleBiomarkerConfig
 
 class ClassifierDataset(Dataset):
     """
@@ -16,7 +16,7 @@ class ClassifierDataset(Dataset):
         Initialize data set
         Loads and preprocesses data
         @param data_path : path to data and labels
-        @param biomarker_config : BiomarkerConfig object specifying which biomarkers to use
+        @param biomarker_config : FlexibleBiomarkerConfig object specifying which biomarkers to use
         @param size : size of each xray
         @param train : load train or test dataset
         """
@@ -26,7 +26,7 @@ class ClassifierDataset(Dataset):
         self.size = size
         self.biomarker_config = biomarker_config
         
-        csv_name = 'train1.csv' if train else 'test1.csv'
+        csv_name = 'train.csv' if train else 'val.csv'
         self.df = pd.read_csv(os.path.join(data_path, csv_name))
         
         # Handle RAF column if it doesn't exist
@@ -38,7 +38,10 @@ class ClassifierDataset(Dataset):
         # Get tensor layout for efficient indexing
         self.tensor_layout = self.biomarker_config.get_tensor_layout()
         
-        print(f"Biomarkers configured: {self.biomarker_config.all_biomarker_names}")
+        # Pre-compute all target tensors for efficient access (needed for class weights)
+        self.targets = self._prepare_all_targets()
+        
+        print(f"Biomarkers configured: {self.biomarker_config.get_all_biomarker_names()}")
         print(f"Total output tensor size: {self.biomarker_config.total_output_size}")
 
     def __len__(self):
@@ -47,6 +50,67 @@ class ClassifierDataset(Dataset):
         @return len : length of dataset
         """
         return self.df.shape[0]
+
+    def _prepare_all_targets(self):
+        """Pre-compute all target tensors for the dataset"""
+        import numpy as np
+        
+        targets = []
+        for idx in range(len(self.df)):
+            data = self.df.iloc[idx]
+            
+            # Create tensor with the configured size
+            t = torch.zeros(self.biomarker_config.total_output_size, dtype=torch.float32)
+            
+            # Process binary biomarkers
+            for biomarker in self.biomarker_config.binary_biomarkers:
+                if biomarker.name in data:
+                    layout = self.tensor_layout[biomarker.name]
+                    idx_start = layout.start_idx
+                    
+                    # Convert using configured classes or default Condition enum
+                    if biomarker.positive_class == "PRESENT" and biomarker.negative_class == "ABSENT":
+                        # Use default Condition converter
+                        t[idx_start] = Condition.convert(data[biomarker.name])
+                    else:
+                        # Use custom class mapping
+                        if data[biomarker.name] == biomarker.positive_class:
+                            t[idx_start] = 1.0
+                        elif data[biomarker.name] == biomarker.negative_class:
+                            t[idx_start] = 0.0
+                        else:
+                            # Default to negative class for unknown values
+                            t[idx_start] = 0.0
+            
+            # Process multiclass biomarkers
+            for biomarker in self.biomarker_config.multiclass_biomarkers:
+                if biomarker.name in data:
+                    layout = self.tensor_layout[biomarker.name]
+                    idx_start = layout.start_idx
+                    
+                    # Get class index and create one-hot encoding
+                    try:
+                        class_idx = biomarker.class_to_index(data[biomarker.name])
+                        t[idx_start + class_idx] = 1.0
+                    except ValueError:
+                        # Default to first class if unknown value
+                        print(f"Warning: Unknown value '{data[biomarker.name]}' for {biomarker.name}, using first class")
+                        t[idx_start] = 1.0
+            
+            # Process continuous biomarkers
+            for biomarker in self.biomarker_config.continuous_biomarkers:
+                if biomarker.name in data:
+                    layout = self.tensor_layout[biomarker.name]
+                    idx_start = layout.start_idx
+                    
+                    # Normalize the continuous value
+                    raw_value = float(data[biomarker.name])
+                    normalized_value = biomarker.normalize(raw_value)
+                    t[idx_start] = normalized_value
+            
+            targets.append(t.numpy())
+        
+        return np.array(targets)
 
     def __getitem__(self, idx):
         """
@@ -57,54 +121,8 @@ class ClassifierDataset(Dataset):
         """
         data = self.df.iloc[idx]
         
-        # Create tensor with the configured size
-        t = torch.zeros(self.biomarker_config.total_output_size, dtype=torch.float32)
-        
-        # Process binary biomarkers
-        for biomarker in self.biomarker_config.binary_biomarkers:
-            if biomarker.name in data:
-                layout = self.tensor_layout[biomarker.name]
-                idx_start = layout['start_idx']
-                
-                # Convert using configured classes or default Condition enum
-                if biomarker.positive_class == "PRESENT" and biomarker.negative_class == "ABSENT":
-                    # Use default Condition converter
-                    t[idx_start] = Condition.convert(data[biomarker.name])
-                else:
-                    # Use custom class mapping
-                    if data[biomarker.name] == biomarker.positive_class:
-                        t[idx_start] = 1.0
-                    elif data[biomarker.name] == biomarker.negative_class:
-                        t[idx_start] = 0.0
-                    else:
-                        # Default to negative class for unknown values
-                        t[idx_start] = 0.0
-        
-        # Process multiclass biomarkers
-        for biomarker in self.biomarker_config.multiclass_biomarkers:
-            if biomarker.name in data:
-                layout = self.tensor_layout[biomarker.name]
-                idx_start = layout['start_idx']
-                
-                # Get class index and create one-hot encoding
-                try:
-                    class_idx = biomarker.class_to_index(data[biomarker.name])
-                    t[idx_start + class_idx] = 1.0
-                except ValueError:
-                    # Default to first class if unknown value
-                    print(f"Warning: Unknown value '{data[biomarker.name]}' for {biomarker.name}, using first class")
-                    t[idx_start] = 1.0
-        
-        # Process continuous biomarkers
-        for biomarker in self.biomarker_config.continuous_biomarkers:
-            if biomarker.name in data:
-                layout = self.tensor_layout[biomarker.name]
-                idx_start = layout['start_idx']
-                
-                # Normalize the continuous value
-                raw_value = float(data[biomarker.name])
-                normalized_value = biomarker.normalize(raw_value)
-                t[idx_start] = normalized_value
+        # Get pre-computed targets
+        t = torch.tensor(self.targets[idx], dtype=torch.float32)
         
         # Load and process image
         xray = Image.open(os.path.join(self.data_path, 'data', data['FILE'] + '.png'))

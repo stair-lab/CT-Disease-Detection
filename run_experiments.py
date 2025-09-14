@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """
-Experiment Runner for Multi-Task Comorbidity Detection
-Runs experiments based on the CSV configuration file
+Flexible Experiment Runner for Multi-Task Comorbidity Detection
+Runs experiments using the flexible biomarker configuration system
 """
 
 import os
 import sys
 import argparse
 import subprocess
+import logging
+import datetime
 from pathlib import Path
 
 # Add current directory to path for imports
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config.experiment_config import ExperimentConfigLoader
+from config.biomarker_config import FlexibleBiomarkerConfig
 from model.model_factory import get_model_memory_requirement
 
 
@@ -85,18 +88,43 @@ def can_run_experiment(config, gpu_info):
     return False, -1
 
 
-def run_single_experiment(config, data_dir, output_base_dir, epochs, gpu_id=None):
+def is_experiment_completed(config, output_base_dir):
+    """Check if experiment is already completed"""
+    output_dir = os.path.join(output_base_dir, config.experiment_name)
+    
+    # Check for completion markers
+    completion_markers = [
+        os.path.join(output_dir, 'training_complete.txt'),
+        os.path.join(output_dir, 'best_model.pth'),
+        os.path.join(output_dir, 'final_results.json')
+    ]
+    
+    # If any completion marker exists, consider it completed
+    for marker in completion_markers:
+        if os.path.exists(marker):
+            return True, marker
+    
+    return False, None
+
+
+def run_single_experiment(config, data_dir, biomarker_config_path, output_base_dir, epochs, gpu_id=None):
     """Run a single experiment"""
     
     # Prepare command
     cmd = [
-        sys.executable, 'train_enhanced.py',
+        sys.executable, 'train.py',
         '--config_csv', config.csv_path if hasattr(config, 'csv_path') else 'experimentation_plan_simplified.csv',
         '--data_dir', data_dir,
+        '--biomarker_config', biomarker_config_path,
         '--output_base_dir', output_base_dir,
         '--epochs', str(epochs),
-        '--model_name', config.model
+        '--model_name', config.model,
+        '--experiment_name', config.experiment_name
     ]
+    
+    # Add learning rate if this is a single-LR experiment
+    if len(config.learning_rate) == 1:
+        cmd.extend(['--learning_rate', str(config.learning_rate[0])])
     
     # Set GPU environment variable if specified
     env = os.environ.copy()
@@ -124,14 +152,47 @@ def run_single_experiment(config, data_dir, output_base_dir, epochs, gpu_id=None
         return False, str(e)
 
 
+def setup_logging(log_file=None):
+    """Setup logging to both console and file"""
+    if log_file is None:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = f"experiments_{timestamp}.log"
+    
+    # Create logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers = []
+    
+    # Console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(message)s')
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+    
+    # File handler
+    file_handler = logging.FileHandler(log_file)
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+    
+    return logger, log_file
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Run Multi-Task Comorbidity Detection Experiments')
+    parser = argparse.ArgumentParser(description='Run Flexible Multi-Task Comorbidity Detection Experiments')
     parser.add_argument('--config_csv', 
                        default='experimentation_plan_simplified.csv',
                        help='Path to experiment configuration CSV')
+    parser.add_argument('--biomarker_config',
+                       default='config/biomarker_config_default.yaml',
+                       help='Path to biomarker configuration file (YAML or JSON)')
     parser.add_argument('--data_dir', 
                        required=True,
-                       help='Path to dataset directory containing train.csv and test.csv')
+                       help='Path to dataset directory containing train.csv and val.csv')
     parser.add_argument('--output_base_dir', 
                        default='/lfs/turing1/0/mahmedc/Comorbidities-Detection/models',
                        help='Base directory for model outputs')
@@ -144,6 +205,20 @@ def main():
     parser.add_argument('--must_include_only', 
                        action='store_true',
                        help='Run only must-include experiments')
+    parser.add_argument('--enable_lr_search', 
+                       action='store_true',
+                       help='Enable learning rate hyperparameter search (expands experiments)')
+    parser.add_argument('--turing1_only', 
+                       action='store_true',
+                       help='Run only experiments compatible with Turing1 GPUs (RTX 2080 Ti, 11GB)')
+    parser.add_argument('--resume', 
+                       action='store_true',
+                       help='Resume experiments by skipping already completed ones')
+    parser.add_argument('--log_file', 
+                       help='Log file path (default: experiments_YYYYMMDD_HHMMSS.log)')
+    parser.add_argument('--no_confirm', 
+                       action='store_true',
+                       help='Skip user confirmation (for automated runs)')
     parser.add_argument('--dry_run', 
                        action='store_true',
                        help='Show what would be run without actually running')
@@ -156,9 +231,18 @@ def main():
     
     args = parser.parse_args()
     
+    # Setup logging
+    logger, log_file = setup_logging(args.log_file)
+    logger.info(f"🚀 Starting experiment runner - Log file: {log_file}")
+    logger.info(f"📋 Arguments: {vars(args)}")
+    
     # Check if files exist
     if not os.path.exists(args.config_csv):
         print(f"❌ Configuration file not found: {args.config_csv}")
+        sys.exit(1)
+    
+    if not os.path.exists(args.biomarker_config):
+        print(f"❌ Biomarker configuration file not found: {args.biomarker_config}")
         sys.exit(1)
     
     if not os.path.exists(args.data_dir):
@@ -167,6 +251,44 @@ def main():
     
     # Create output directory
     os.makedirs(args.output_base_dir, exist_ok=True)
+    
+    # Load biomarker configuration
+    print(f"📊 Loading biomarker configuration from: {args.biomarker_config}")
+    try:
+        biomarker_config = FlexibleBiomarkerConfig(args.biomarker_config)
+        print(f"✅ Biomarker configuration loaded:")
+        biomarker_config.print_summary()
+    except Exception as e:
+        print(f"❌ Error loading biomarker configuration: {e}")
+        sys.exit(1)
+    
+    # Validate dataset compatibility
+    print(f"\n🔍 Validating dataset compatibility...")
+    try:
+        import pandas as pd
+        train_df = pd.read_csv(os.path.join(args.data_dir, 'train.csv'))
+        val_df = pd.read_csv(os.path.join(args.data_dir, 'val.csv'))
+        
+        train_compatible, train_missing = biomarker_config.validate_dataset_compatibility(train_df)
+        val_compatible, val_missing = biomarker_config.validate_dataset_compatibility(val_df)
+        
+        if not train_compatible:
+            print(f"❌ Train dataset missing columns: {train_missing}")
+            sys.exit(1)
+        
+        if not val_compatible:
+            print(f"❌ Validation dataset missing columns: {val_missing}")
+            sys.exit(1)
+        
+        print(f"✅ Dataset compatibility verified")
+        print(f"   Train samples: {len(train_df):,}")
+        print(f"   Validation samples: {len(val_df):,}")
+        print(f"   Required biomarkers: {len(biomarker_config.get_all_biomarker_names())}")
+        print(f"   Output tensor size: {biomarker_config.total_output_size}")
+        
+    except Exception as e:
+        print(f"❌ Error validating dataset: {e}")
+        sys.exit(1)
     
     # Load experiment configurations
     config_loader = ExperimentConfigLoader(args.config_csv)
@@ -179,13 +301,35 @@ def main():
             available_models = config_loader.get_available_models()
             print(f"Available models: {', '.join(available_models)}")
             sys.exit(1)
-        configs_to_run = [config]
+        
+        # Expand learning rates if requested
+        if args.enable_lr_search:
+            configs_to_run = config.generate_lr_experiments()
+            print(f"🔍 Learning rate search enabled: {len(configs_to_run)} experiments for {args.model_name}")
+        else:
+            configs_to_run = [config]
     else:
         # Run all or must-include models
-        if args.must_include_only:
-            configs_to_run = config_loader.load_must_include_configs()
+        if args.enable_lr_search:
+            if args.must_include_only:
+                if args.turing1_only:
+                    configs_to_run = config_loader.load_turing1_must_include_with_lr_expansion()
+                    print(f"🔍 Learning rate search + Turing1 filter: Expanded to {len(configs_to_run)} experiments")
+                else:
+                    configs_to_run = config_loader.load_must_include_configs_with_lr_expansion()
+                    print(f"🔍 Learning rate search enabled: Expanded to {len(configs_to_run)} experiments")
+            else:
+                configs_to_run = config_loader.load_all_configs_with_lr_expansion()
+                print(f"🔍 Learning rate search enabled: Expanded to {len(configs_to_run)} experiments")
         else:
-            configs_to_run = config_loader.load_all_configs()
+            if args.must_include_only:
+                if args.turing1_only:
+                    configs_to_run = config_loader.load_turing1_must_include_configs()
+                    print(f"🖥️ Turing1-compatible must-include experiments: {len(configs_to_run)} experiments")
+                else:
+                    configs_to_run = config_loader.load_must_include_configs()
+            else:
+                configs_to_run = config_loader.load_all_configs()
     
     print(f"📊 Found {len(configs_to_run)} experiments to run")
     
@@ -225,50 +369,70 @@ def main():
     
     # Show experiment plan
     print(f"\n📋 Experiment Plan:")
-    print("=" * 80)
+    print("=" * 100)
+    print(f"{'#':<3} {'Model':<40} {'Memory':<12} {'LR':<10} {'Status':<15}")
+    print("-" * 100)
     for i, config in enumerate(configs_to_run):
-        gpu_str = f" (GPU {gpu_assignments.get(config.model, 'auto')})" if args.check_memory else ""
+        gpu_str = f"GPU {gpu_assignments.get(config.model, 'auto')}" if args.check_memory else "auto"
         output_dir = os.path.join(args.output_base_dir, config.experiment_name)
-        exists_str = " ⚠️ EXISTS" if os.path.exists(output_dir) else ""
-        print(f"{i+1:2d}. {config.model:<40} | {config.expected_gpu_memory:<10} | LR: {config.learning_rate}{gpu_str}{exists_str}")
-        print(f"    Output: {config.experiment_name}")
-    print("=" * 80)
+        exists_str = "EXISTS" if os.path.exists(output_dir) else "NEW"
+        lr_str = f"{config.learning_rate[0]:.0e}" if config.learning_rate else "N/A"
+        print(f"{i+1:<3} {config.model:<40} {config.expected_gpu_memory:<12} {lr_str:<10} {exists_str:<15}")
+    print("=" * 100)
     
-    # Check for existing directories
-    existing_dirs = []
-    for config in configs_to_run:
-        output_dir = os.path.join(args.output_base_dir, config.experiment_name)
-        if os.path.exists(output_dir):
-            existing_dirs.append(config.experiment_name)
-    
-    if existing_dirs:
-        print(f"\n⚠️  Note: {len(existing_dirs)} experiment directories already exist:")
-        for dir_name in existing_dirs[:5]:  # Show first 5
-            print(f"    {dir_name}")
-        if len(existing_dirs) > 5:
-            print(f"    ... and {len(existing_dirs) - 5} more")
-        print("   The system will automatically create new timestamped directories if needed.")
+    print(f"\nBiomarker Configuration: {biomarker_config.experiment_name}")
+    print(f"Binary tasks: {biomarker_config.num_binary_tasks}")
+    print(f"Multiclass tasks: {biomarker_config.num_multiclass_tasks}")
+    print(f"Continuous tasks: {biomarker_config.num_continuous_tasks}")
+    print(f"Total output size: {biomarker_config.total_output_size}")
     
     if args.dry_run:
-        print("🔍 Dry run completed. Use --dry_run=false to actually run experiments.")
+        print("🔍 Dry run completed. Remove --dry_run to actually run experiments.")
+        return
+    
+    # Filter out completed experiments if resume is enabled
+    if args.resume:
+        original_count = len(configs_to_run)
+        remaining_configs = []
+        completed_configs = []
+        
+        for config in configs_to_run:
+            is_completed, marker = is_experiment_completed(config, args.output_base_dir)
+            if is_completed:
+                completed_configs.append((config.experiment_name, marker))
+            else:
+                remaining_configs.append(config)
+        
+        configs_to_run = remaining_configs
+        logger.info(f"📋 Resume mode: {len(completed_configs)} already completed, {len(configs_to_run)} remaining")
+        
+        if completed_configs:
+            logger.info("✅ Already completed experiments:")
+            for exp_name, marker in completed_configs:
+                logger.info(f"  - {exp_name} (found: {os.path.basename(marker)})")
+    
+    if len(configs_to_run) == 0:
+        logger.info("🎉 All experiments already completed!")
         return
     
     # Confirm before running
-    if not args.model_name:  # Only ask for confirmation when running multiple experiments
+    if not args.model_name and not args.no_confirm:  # Only ask for confirmation when running multiple experiments
         response = input(f"\n🚀 Ready to run {len(configs_to_run)} experiments. Continue? [y/N]: ")
         if response.lower() not in ['y', 'yes']:
-            print("❌ Aborted by user")
+            logger.info("❌ Aborted by user")
             return
     
     # Run experiments
-    print(f"\n🏃 Starting experiments...")
+    logger.info(f"\n🏃 Starting experiments...")
     successful_runs = []
     failed_runs = []
     
     for i, config in enumerate(configs_to_run):
-        print(f"\n{'='*60}")
-        print(f"🔄 Running experiment {i+1}/{len(configs_to_run)}: {config.model}")
-        print(f"{'='*60}")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🔄 Running experiment {i+1}/{len(configs_to_run)}: {config.experiment_name}")
+        logger.info(f"Model: {config.model}")
+        logger.info(f"Learning Rate: {config.learning_rate[0]:.0e}")
+        logger.info(f"{'='*60}")
         
         # Determine GPU to use
         gpu_id = gpu_assignments.get(config.model) if args.check_memory else None
@@ -279,35 +443,52 @@ def main():
         success, output = run_single_experiment(
             config=config,
             data_dir=args.data_dir,
+            biomarker_config_path=args.biomarker_config,
             output_base_dir=args.output_base_dir,
             epochs=args.epochs,
             gpu_id=gpu_id
         )
         
         if success:
-            successful_runs.append(config.model)
+            successful_runs.append(config.experiment_name)
+            logger.info(f"✅ COMPLETED: {config.experiment_name}")
         else:
-            failed_runs.append((config.model, output))
+            failed_runs.append((config.experiment_name, output))
+            logger.error(f"❌ FAILED: {config.experiment_name}")
+            logger.error(f"Error details: {output}")
     
     # Summary
-    print(f"\n{'='*60}")
-    print(f"📊 Experiment Summary")
-    print(f"{'='*60}")
-    print(f"✅ Successful: {len(successful_runs)}")
-    print(f"❌ Failed: {len(failed_runs)}")
+    logger.info(f"\n{'='*60}")
+    logger.info(f"📊 FINAL EXPERIMENT SUMMARY")
+    logger.info(f"{'='*60}")
+    logger.info(f"✅ Successful: {len(successful_runs)}")
+    logger.info(f"❌ Failed: {len(failed_runs)}")
+    logger.info(f"📁 Results saved in: {args.output_base_dir}")
+    logger.info(f"📋 Log file: {log_file}")
     
     if successful_runs:
-        print(f"\n✅ Successful experiments:")
+        logger.info(f"\n✅ Successful experiments:")
         for model in successful_runs:
-            print(f"    {model}")
+            logger.info(f"    {model}")
     
     if failed_runs:
-        print(f"\n❌ Failed experiments:")
+        logger.info(f"\n❌ Failed experiments:")
         for model, error in failed_runs:
-            print(f"    {model}: {error[:100]}...")
+            logger.info(f"    {model}")
+            logger.error(f"    Error: {error[:200]}...")
     
-    print(f"\n📁 Results saved to: {args.output_base_dir}")
-    print(f"📈 View tensorboard logs: tensorboard --logdir {args.output_base_dir}")
+    # Final status
+    success_rate = len(successful_runs) / len(configs_to_run) * 100 if configs_to_run else 100
+    logger.info(f"\n🎯 Final Status: {len(successful_runs)}/{len(configs_to_run)} experiments completed ({success_rate:.1f}% success rate)")
+    logger.info(f"📈 View tensorboard logs: tensorboard --logdir {args.output_base_dir}")
+    
+    if len(successful_runs) == len(configs_to_run):
+        logger.info("🎉 ALL EXPERIMENTS COMPLETED SUCCESSFULLY!")
+    elif len(successful_runs) > 0:
+        logger.info("⚠️  Some experiments failed - check log for details")
+    else:
+        logger.error("💥 ALL EXPERIMENTS FAILED - check configuration and logs")
+    print(f"🧬 Biomarker config used: {args.biomarker_config}")
 
 
 if __name__ == "__main__":

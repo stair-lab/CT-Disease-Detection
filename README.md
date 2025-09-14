@@ -1,19 +1,33 @@
-# Enhanced Multi-Task Comorbidity Detection
+# Enhanced Multi-Task Comorbidity Detection with Flexible Configuration System
 
-This enhanced training system supports comprehensive experimentation with 25+ different deep learning architectures for multi-task comorbidity detection from CT scans.
+This enhanced training system supports comprehensive experimentation with 25+ different deep learning architectures for multi-task comorbidity detection from CT scans, featuring a **flexible biomarker configuration system** that eliminates hardcoded assumptions.
 
-## 🚀 Features
+## 🎯 Overview
 
-### ✅ Implemented
+The system now features a **completely flexible biomarker configuration system** that dynamically adapts to any task structure without requiring code changes. This allows for easy experimentation with different combinations of binary classification, multiclass classification, and regression tasks.
+
+## 🚀 Key Features
+
+### ✅ **Flexible Multi-Task Learning System**
+- **Dynamic Task Configuration**: No more hardcoded assumptions about number of tasks
+- **YAML/JSON Configuration**: Define tasks and their properties in configuration files
+- **Automatic Tensor Layout**: System automatically generates appropriate tensor layouts
+- **Dataset Compatibility Validation**: Automatic checking of dataset compatibility
+- **Backward Compatibility**: Existing experiments continue to work
+
+### ✅ **Architecture Support**
 - **25+ Model Architectures**: CNNs, Vision Transformers, Vision-Language Models, Diffusion Models
-- **Multi-Task Learning**: Binary classification (7 HCC conditions) + Multiclass (calcium scoring) + Regression (age, RAF)
+- **Flexible Multi-Task Head**: Adapts to any number and combination of tasks
 - **Comprehensive Logging**: TensorBoard integration with loss curves, metrics per biomarker
 - **Advanced Checkpointing**: Best model selection based on average AUROC across biomarkers
 - **Class Balancing**: Inverse frequency weighting and balanced batch sampling
-- **Flexible Configuration**: CSV-based experiment configuration system
 - **Memory Management**: GPU memory requirement checking and optimization
-- **Validation Pipeline**: Separate validation passes at each epoch
-- **Metrics Tracking**: AUROC, F1-score, accuracy per biomarker with optimal thresholding
+
+### ✅ **Your Current Configuration**
+- **12 Binary Tasks**: GENDER, MORTALITY, HCC codes (HCC12, HCC18, HCC19, HCC22, HCC48, HCC85, HCC96, HCC108, HCC111), CALCIUMSCORING_ABDOMINALAGATSTON_BINARY
+- **1 Regression Task**: AGE (normalized to [0,1] from range 18-102)
+- **0 Multiclass Tasks**: None for current experiment
+- **Total Output Size**: 13
 
 ### 🔧 Architecture Support Status
 - ✅ **Fully Implemented**: ResNet (18/34/50), DenseNet-121, EfficientNet (B0/B4), ConvNeXt-Base
@@ -26,18 +40,21 @@ This enhanced training system supports comprehensive experimentation with 25+ di
 ```
 CT-Disease-Detection/
 ├── model/
-│   ├── model_factory.py       # Model factory supporting all architectures
-│   ├── resnet34.py           # Original ResNet-34 implementation
-│   └── cc_resnet.py          # Coordinate convolution ResNet
+│   ├── model_factory.py           # Model factory with flexible head integration
+│   ├── flexible_multitask_head.py # Flexible multi-task components
+│   ├── resnet34.py               # Original ResNet-34 implementation
+│   └── cc_resnet.py              # Coordinate convolution ResNet
 ├── config/
-│   ├── experiment_config.py   # Configuration system
+│   ├── biomarker_config.py       # Flexible configuration system
+│   ├── biomarker_config_comorbidities.yaml # Your specific biomarker config
+│   ├── experiment_config.py       # Experiment configuration system
 │   └── __init__.py
-├── train_enhanced.py          # Enhanced training pipeline
-├── run_experiments.py         # Experiment runner script
-├── test_setup.py             # Setup verification script
-├── experimentation_plan_simplified.csv  # Experiment configurations
-├── requirements_enhanced.txt  # Enhanced dependencies
-└── README_enhanced.md        # This file
+├── train.py                       # Flexible training pipeline
+├── run_experiments.py             # Flexible experiment runner
+├── test_setup.py                 # Setup verification script
+├── experimentation_plan_simplified.csv # Experiment configurations
+├── requirements_enhanced.txt      # Enhanced dependencies
+└── README.md                     # This file
 ```
 
 ## 🛠 Setup
@@ -62,8 +79,9 @@ python test_setup.py
 ### 3. Prepare Data
 
 Ensure your data directory contains:
-- `train1.csv` - Training data labels
-- `test1.csv` - Validation data labels  
+- `train.csv` - Training data labels
+- `val.csv` - Validation data labels  
+- `test.csv` - Test data labels
 - `data/` - Directory with CT scan images (PNG format)
 
 ## 🏃 Running Experiments
@@ -71,10 +89,11 @@ Ensure your data directory contains:
 ### Quick Start - Single Model
 
 ```bash
-# Run a specific model
-python train_enhanced.py \
+# Run a specific model with flexible configuration
+python train.py \
     --config_csv experimentation_plan_simplified.csv \
-    --data_dir /path/to/your/data \
+    --biomarker_config config/biomarker_config_default.yaml \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
     --model_name "ResNet-18" \
     --epochs 100
 ```
@@ -82,9 +101,10 @@ python train_enhanced.py \
 ### Batch Experiments - Must Include Models
 
 ```bash
-# Run all must-include experiments
+# Run all must-include experiments with flexible configuration
 python run_experiments.py \
     --config_csv experimentation_plan_simplified.csv \
+    --biomarker_config config/biomarker_config_default.yaml \
     --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
     --output_base_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/models \
     --epochs 100 \
@@ -98,16 +118,113 @@ python run_experiments.py \
 # Dry run to see what would be executed
 python run_experiments.py \
     --config_csv experimentation_plan_simplified.csv \
-    --data_dir /path/to/data \
+    --biomarker_config config/biomarker_config_default.yaml \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
     --dry_run \
     --check_memory
 
-# Run specific architectural family
+# Run specific model
 python run_experiments.py \
     --config_csv experimentation_plan_simplified.csv \
-    --data_dir /path/to/data \
-    --model_name "ViT-Base (DINOv2)" \
+    --biomarker_config config/biomarker_config_default.yaml \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+    --model_name "ResNet-18" \
     --epochs 50
+
+# Enable learning rate hyperparameter search
+python run_experiments.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --biomarker_config config/biomarker_config_default.yaml \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+    --model_name "ResNet-18" \
+    --enable_lr_search \
+    --epochs 50
+
+# Run all must-include experiments with LR search (expands to ~51 experiments)
+python run_experiments.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --biomarker_config config/biomarker_config_default.yaml \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+    --must_include_only \
+    --enable_lr_search \
+    --epochs 100
+
+# Run only Turing1-compatible experiments (21 experiments, fits RTX 2080 Ti 11GB)
+python run_experiments.py \
+    --config_csv experimentation_plan_simplified.csv \
+    --biomarker_config config/biomarker_config_default.yaml \
+    --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+    --must_include_only \
+    --turing1_only \
+    --enable_lr_search \
+    --epochs 100
+```
+
+## 📊 Flexible Biomarker Configuration
+
+### Current Setup (biomarker_config_default.yaml)
+
+```yaml
+experiment_name: "comorbidities_detection"
+description: "Multi-task learning for comorbidity detection from CT scans"
+
+binary_biomarkers:
+  - GENDER (male=1, female=0)
+  - MORTALITY (PRESENT/ABSENT)
+  - HCC12, HCC18, HCC19, HCC22, HCC48, HCC85, HCC96, HCC108, HCC111 (PRESENT/ABSENT)
+  - CALCIUMSCORING_ABDOMINALAGATSTON_BINARY (PRESENT/ABSENT)
+
+continuous_biomarkers:
+  - AGE (18-102 years, normalized to [0,1])
+
+multiclass_biomarkers: []
+```
+
+### Tensor Layout (Automatically Generated)
+
+```
+Index  Biomarker                                Type
+0      GENDER                                   Binary
+1      MORTALITY                                Binary  
+2      HCC12                                    Binary
+3      HCC18                                    Binary
+4      HCC19                                    Binary
+5      HCC22                                    Binary
+6      HCC48                                    Binary
+7      HCC85                                    Binary
+8      HCC96                                    Binary
+9      HCC108                                   Binary
+10     HCC111                                   Binary
+11     CALCIUMSCORING_ABDOMINALAGATSTON_BINARY  Binary
+12     AGE                                      Continuous
+```
+
+## 🔄 Migration from Hardcoded System
+
+### Old Way (Hardcoded)
+```python
+# Fixed assumptions in train.py
+NUM_BINARY_TASKS = 7
+NUM_REGRESSION_TASKS = 2  
+CALCIUM_CLASSES = 4
+CONDITIONS = ['GENDER', 'HCC18', ...]  # Fixed list
+
+# Fixed multi-task head
+model.fc = MultiTaskHead(feature_dim, num_binary_tasks=7, ...)
+```
+
+### New Way (Flexible)
+```python
+# Dynamic configuration
+from config.biomarker_config import FlexibleBiomarkerConfig
+biomarker_config = FlexibleBiomarkerConfig('config/biomarker_config_default.yaml')
+
+# Adaptive multi-task head
+model.fc = FlexibleMultiTaskHead(feature_dim, biomarker_config)
+
+# Flexible loss and metrics
+criterion = FlexibleMultiTaskLoss(biomarker_config)
+metrics_calc = FlexibleMetricsCalculator(biomarker_config)
 ```
 
 ## 📊 Experiment Configuration
@@ -116,13 +233,47 @@ The system uses `experimentation_plan_simplified.csv` to configure experiments. 
 
 - **Model**: Architecture name (must match ModelFactory names)
 - **Must Include**: Whether to include in batch runs
-- **Learning Rate**: Single value or list for hyperparameter search
+- **Learning Rate**: Single value or list for hyperparameter search (e.g., `"[1e-5, 1e-4, 1e-3]"`)
 - **Batch Size**: Training batch size
 - **Optimizer**: AdamW, Adam, or SGD
-- **Scheduler**: CosineAnnealing, ReduceLROnPlateau, etc.
+- **Scheduler**: CosineAnnealing, ReduceLROnPlateau, StepLR, ExponentialLR, etc.
 - **Expected_GPU_Memory**: For memory checking
 - **Class_Weighting**: inverse_frequency for balanced training
 - **Sampling_Strategy**: balanced_batch for balanced sampling
+
+### 🔍 **Hyperparameter Search**
+
+The system supports **automatic learning rate hyperparameter search**:
+
+- **CSV Format**: Specify multiple learning rates as `"[1e-5, 1e-4, 1e-3]"`
+- **Automatic Expansion**: Each base experiment becomes multiple experiments (one per LR)
+- **Directory Naming**: Each experiment gets a unique directory with LR in the name
+  - Example: `ResNet-18_lr1e-05_bs16_20250913_113026/`
+  - Example: `ResNet-18_lr1e-04_bs16_20250913_113026/`
+- **Enable with Flag**: Use `--enable_lr_search` to activate hyperparameter search
+- **Scaling**: Must-include experiments expand from ~15 to ~45 total experiments
+
+### 🖥️ **GPU Compatibility (Turing1)**
+
+The system includes **automatic GPU compatibility filtering** for RTX 2080 Ti GPUs (11GB VRAM):
+
+- **Hardware Analysis**: 10x RTX 2080 Ti GPUs, ~10.5GB usable per GPU
+- **Turing1 Column**: Added to CSV to mark compatible experiments
+- **Smart Filtering**: `--turing1_only` flag filters out memory-intensive models
+- **Optimization**: Reduces 51 experiments to 21 compatible experiments
+
+**Compatible Models** (7 architectures × 3 learning rates = 21 experiments):
+- ✅ **ResNet-18** (4-6GB) - Lightweight CNN
+- ✅ **ResNet-34** (6-8GB) - Medium CNN  
+- ✅ **DenseNet-121** (8-10GB) - Dense connections
+- ✅ **EfficientNet-B0** (6-8GB) - Efficient scaling
+- ✅ **ViT-Small (DINOv2)** (8-10GB) - Self-supervised ViT
+- ✅ **Stable Diffusion VAE Encoder (frozen)** (8-10GB) - Generative features
+- ✅ **ResNet-50 (RadImageNet)** (6-8GB) - Medical pre-training
+
+**Filtered Out** (too big for 11GB):
+- ❌ EfficientNet-B4, ConvNeXt-Base, ViT-Base/Large, Swin Transformer
+- ❌ MaxViT, Full Diffusion models, MAE ViT-Base
 
 ## 📈 Monitoring and Results
 
@@ -149,27 +300,70 @@ models/
     ├── tensorboard/           # TensorBoard logs
     ├── best_checkpoint.pth    # Best model (highest avg AUROC)
     ├── latest_checkpoint.pth  # Most recent model
-    ├── checkpoint_epoch_*.pth # Periodic checkpoints
-    └── config.json           # Experiment configuration
+    ├── config.json           # Experiment configuration
+    └── biomarker_config.json # Biomarker configuration used
 ```
 
 ## 🎯 Multi-Task Learning Details
 
-### Task Structure
-- **Binary Classification** (7 tasks): HCC18, HCC22, HCC85, HCC96, HCC108, HCC111, GENDER
-- **Multiclass Classification** (1 task): CalciumScoring_AbdominalAgatston (4 classes)
-- **Regression** (2 tasks): AGE, RAF
-
-### Loss Function
-Combined loss: `L_total = L_binary + L_calcium + L_regression`
-- Binary: Weighted BCE with inverse frequency weighting
-- Calcium: Cross-entropy loss
-- Regression: MSE loss
+### Flexible Loss Function
+Combined loss automatically adapts based on configuration:
+- **Binary Tasks**: Weighted BCE with inverse frequency weighting
+- **Multiclass Tasks**: Cross-entropy loss
+- **Regression Tasks**: MSE loss
 
 ### Model Selection
 Best model selected based on **average AUROC** across all binary classification and multiclass tasks.
 
+### Comprehensive Metrics
+- **Binary Tasks**: AUROC, Accuracy, Sensitivity, Specificity, F1-score
+- **Multiclass Tasks**: AUROC (macro), Accuracy, Per-class metrics
+- **Regression Tasks**: MSE, MAE, R² score
+
+## ⚡ Key Benefits
+
+### 1. **No More Hardcoding**
+- Change tasks by editing YAML file only
+- No code changes needed for different experiments
+- Easy to add/remove biomarkers
+
+### 2. **Automatic Validation**
+- Dataset compatibility checking
+- Missing column detection
+- Tensor layout validation
+
+### 3. **Future-Proof Design**
+- Easy to add new task types
+- Supports any combination of tasks
+- Backward compatible with existing code
+
 ## 🔧 Customization
+
+### Adding New Biomarkers
+
+Simply edit the YAML configuration file:
+
+```yaml
+# Add new binary biomarker
+binary_biomarkers:
+  - name: "NEW_CONDITION"
+    description: "New medical condition"
+    positive_class: "PRESENT"
+
+# Add new multiclass biomarker  
+multiclass_biomarkers:
+  - name: "SEVERITY_SCORE"
+    description: "Disease severity"
+    classes: ["MILD", "MODERATE", "SEVERE"]
+
+# Add new continuous biomarker
+continuous_biomarkers:
+  - name: "BIOMARKER_VALUE"
+    description: "Continuous biomarker"
+    min_value: 0.0
+    max_value: 100.0
+    normalization: "min_max"
+```
 
 ### Adding New Models
 
@@ -177,13 +371,44 @@ Best model selected based on **average AUROC** across all binary classification 
 2. Add entry to CSV configuration file
 3. Update memory requirements in `get_model_memory_requirement()`
 
-### Modifying Training
+## 🚦 Getting Started
 
-Key components to customize:
-- `MultiTaskLoss`: Modify loss weighting
-- `MetricsCalculator`: Add new metrics
-- `create_data_transforms()`: Modify augmentations
-- `train_epoch()`/`validate_epoch()`: Modify training loop
+### 1. Verify Data Compatibility
+
+```bash
+python -c "
+from config.biomarker_config import FlexibleBiomarkerConfig
+import pandas as pd
+
+   config = FlexibleBiomarkerConfig('config/biomarker_config_default.yaml')
+df = pd.read_csv('/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data/train.csv')
+compatible, missing = config.validate_dataset_compatibility(df)
+print(f'Compatible: {compatible}')
+if missing: print(f'Missing: {missing}')
+"
+```
+
+### 2. Run Test Experiment
+
+```bash
+python run_experiments.py \
+  --model_name "ResNet-18" \
+  --biomarker_config config/biomarker_config_default.yaml \
+  --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+  --epochs 5 \
+  --dry_run
+```
+
+### 3. Run Full Experiments
+
+```bash
+python run_experiments.py \
+  --biomarker_config config/biomarker_config_default.yaml \
+  --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
+  --epochs 100 \
+  --must_include_only \
+  --check_memory
+```
 
 ## 📋 Experiment Tracking
 
@@ -193,6 +418,7 @@ The system automatically tracks:
 - Best model checkpoints
 - Experiment success/failure status
 - GPU memory usage and assignments
+- Biomarker configuration used
 
 Results are saved in:
 - Individual experiment directories
@@ -221,6 +447,11 @@ Results are saved in:
    - Check that image files exist in `data/` directory
    - Ensure normalization values match your data
 
+5. **Biomarker Configuration Issues**
+   - Use the validation function to check dataset compatibility
+   - Ensure all required biomarker columns exist in your data
+   - Check YAML syntax is correct
+
 ### Performance Tips
 
 1. **GPU Memory Optimization**
@@ -233,6 +464,14 @@ Results are saved in:
    - Increase `num_workers` in DataLoader
    - Use SSD storage for faster I/O
 
+## 📈 Expected Results
+
+With your 12 binary + 1 regression task configuration:
+- **Model Output Size**: 13 
+- **Loss Components**: 12 binary BCE losses + 1 MSE loss
+- **Metrics**: AUROC/Accuracy/F1 for each binary task + MSE/MAE/R² for age
+- **Model Selection**: Based on average AUROC across binary tasks
+
 ## 🔮 Future Enhancements
 
 - **Full CLIP Integration**: Proper vision-language model support
@@ -241,6 +480,7 @@ Results are saved in:
 - **Distributed Training**: Multi-GPU and multi-node support
 - **Advanced Metrics**: ROC curves, confusion matrices, per-class analysis
 - **Model Interpretability**: Attention visualization, GradCAM
+- **Additional Task Types**: Support for ordinal regression, multi-label classification
 
 ## 📞 Support
 
@@ -249,6 +489,7 @@ For issues or questions:
 2. Run `python test_setup.py` to verify setup
 3. Review TensorBoard logs for training issues
 4. Check experiment output directories for detailed logs
+5. Validate your biomarker configuration with the built-in validation tools
 
 Questions: ayis@ayis.org
 
