@@ -109,7 +109,7 @@ class ModelFactory:
         
         elif architecture in ["ViT-Small (DINOv2)", "ViT-Base (DINOv2)", "ViT-Large (DINOv2)"]:
             return ModelFactory._create_dinov2_vit(architecture, num_classes, 
-                                                  fine_tuning_strategy, dropout)
+                                                  fine_tuning_strategy, dropout, biomarker_config)
         
         elif architecture == "Swin Transformer-Base":
             return ModelFactory._create_swin_base(num_classes, pretrained_weights, 
@@ -137,7 +137,7 @@ class ModelFactory:
                              "Stable Diffusion v1.5 VAE Encoder (frozen)",
                              "Stable Diffusion XL VAE Encoder"]:
             return ModelFactory._create_diffusion_encoder(architecture, num_classes, 
-                                                         fine_tuning_strategy, dropout)
+                                                         fine_tuning_strategy, dropout, biomarker_config)
         
         elif architecture == "DiT-Base (Diffusion Transformer)":
             return ModelFactory._create_dit_base(num_classes, fine_tuning_strategy, dropout)
@@ -146,7 +146,7 @@ class ModelFactory:
             return ModelFactory._create_mae_vit_base(num_classes, fine_tuning_strategy, dropout)
         
         elif architecture == "ResNet-50 (RadImageNet)":
-            return ModelFactory._create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout)
+            return ModelFactory._create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout, biomarker_config)
         
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
@@ -305,20 +305,20 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_dinov2_vit(architecture, num_classes, fine_tuning_strategy, dropout):
+    def _create_dinov2_vit(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config):
         # Use timm for DINOv2 models
         if "Small" in architecture:
-            model_name = "vit_small_patch14_dinov2.lvd142m"
+            model_name = "vit_small_patch14_dinov2"
         elif "Base" in architecture:
-            model_name = "vit_base_patch14_dinov2.lvd142m"
+            model_name = "vit_base_patch14_dinov2"
         else:  # Large
-            model_name = "vit_large_patch14_dinov2.lvd142m"
+            model_name = "vit_large_patch14_dinov2"
         
         model = timm.create_model(model_name, pretrained=True, num_classes=0, img_size=256)  # Remove head, set input size
         
-        # Add custom multi-task head
+        # Add flexible multi-task head
         feature_dim = model.num_features
-        model.head = MultiTaskHead(feature_dim, dropout=dropout)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
         
         # Keep 3-channel input since training script converts images to 3-channel
         # No need to modify patch_embed for single channel
@@ -458,13 +458,14 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_diffusion_encoder(architecture, num_classes, fine_tuning_strategy, dropout):
+    def _create_diffusion_encoder(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config):
         # Placeholder for diffusion model encoders
         print(f"Warning: {architecture} not fully implemented yet. Using ResNet-50 as placeholder.")
         model = models.resnet50(weights=None)
-        model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # Use 3-channel input since training script converts to 3-channel
+        model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         feature_dim = model.fc.in_features
-        model.fc = MultiTaskHead(feature_dim, dropout=dropout)
+        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
         
         if "frozen" in architecture:
             for param in model.parameters():
@@ -510,17 +511,17 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout):
+    def _create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout, biomarker_config):
         # Placeholder for RadImageNet weights
         print("Warning: RadImageNet weights not available. Using ImageNet ResNet-50.")
         model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
         
-        # Modify for single channel input
-        model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        # Keep 3-channel input since training script converts to 3-channel
+        # No need to modify conv1 - it already expects 3 channels
         
         # Replace classifier
         feature_dim = model.fc.in_features
-        model.fc = MultiTaskHead(feature_dim, dropout=dropout)
+        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
         
         return model
 

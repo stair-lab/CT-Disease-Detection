@@ -110,6 +110,13 @@ def is_experiment_completed(config, output_base_dir):
 def run_single_experiment(config, data_dir, biomarker_config_path, output_base_dir, epochs, gpu_id=None):
     """Run a single experiment"""
     
+    # Ensure Hugging Face cache directory exists on /lfs filesystem
+    # Use /lfs path instead of /afs to avoid subprocess permission issues
+    hf_cache_dir = '/lfs/turing1/0/mahmedc/.cache/huggingface'
+    os.makedirs(os.path.join(hf_cache_dir, 'transformers'), exist_ok=True)
+    os.makedirs(os.path.join(hf_cache_dir, 'datasets'), exist_ok=True)
+    os.makedirs(os.path.join(hf_cache_dir, 'hub'), exist_ok=True)
+    
     # Prepare command
     cmd = [
         sys.executable, 'train.py',
@@ -131,9 +138,17 @@ def run_single_experiment(config, data_dir, biomarker_config_path, output_base_d
     if gpu_id is not None:
         env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
     
+    # Fix Hugging Face cache directory to avoid AFS permission issues
+    # Set cache to a location on /lfs filesystem instead of /afs
+    env['HF_HOME'] = hf_cache_dir
+    env['TRANSFORMERS_CACHE'] = os.path.join(hf_cache_dir, 'transformers')
+    env['HF_DATASETS_CACHE'] = os.path.join(hf_cache_dir, 'datasets')
+    env['HF_HUB_CACHE'] = os.path.join(hf_cache_dir, 'hub')
+    
     print(f"Running command: {' '.join(cmd)}")
     if gpu_id is not None:
         print(f"Using GPU {gpu_id}")
+    print(f"Hugging Face cache directory: {hf_cache_dir}")
     
     # Run experiment
     try:
