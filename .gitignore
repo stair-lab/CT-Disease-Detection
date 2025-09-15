@@ -3,3 +3,4 @@
 *.csv
 *.pth
 *.log
+!experimentation_plan_simplified.csv
