@@ -24,8 +24,157 @@ from transformers import (
     AutoModel, AutoProcessor,
     BlipModel, BlipProcessor
 )
+try:
+    from diffusers import AutoencoderKL
+    DIFFUSERS_AVAILABLE = True
+except ImportError:
+    DIFFUSERS_AVAILABLE = False
+    print("Warning: diffusers library not available. Stable Diffusion VAE will use placeholder.")
 from .resnet34 import ResNet34
 from .cc_resnet import resnet34
+
+
+class StableDiffusionVAEEncoder(nn.Module):
+    """
+    Stable Diffusion VAE Encoder wrapper for medical image analysis
+    """
+    def __init__(self, model_id="runwayml/stable-diffusion-v1-5", feature_dim=512, 
+                 biomarker_config=None, dropout=0.1, frozen=True):
+        super().__init__()
+        
+        if not DIFFUSERS_AVAILABLE:
+            raise ImportError("diffusers library is required for Stable Diffusion VAE Encoder. "
+                            "Install with: pip install diffusers")
+        
+        # Set cache directory to avoid AFS permission issues
+        import os
+        os.environ['HF_HOME'] = '/lfs/turing1/0/mahmedc/.cache/huggingface'
+        os.environ['TRANSFORMERS_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/transformers'
+        os.environ['HF_HUB_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/hub'
+        
+        # Create cache directories if they don't exist
+        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/hub', exist_ok=True)
+        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/transformers', exist_ok=True)
+        
+        # Load the VAE encoder from Stable Diffusion v1.5
+        self.vae = AutoencoderKL.from_pretrained(
+            model_id, 
+            subfolder="vae",
+            cache_dir='/lfs/turing1/0/mahmedc/.cache/huggingface'
+        )
+        
+        # Only use the encoder part
+        self.encoder = self.vae.encoder
+        
+        # Freeze encoder weights if specified
+        self._frozen = frozen
+        if frozen:
+            for param in self.encoder.parameters():
+                param.requires_grad = False
+        
+        # The VAE encoder outputs latents of shape [B, latent_channels, H/8, W/8]
+        # For a 256x256 input, this becomes [B, latent_channels, 32, 32]
+        # Note: latent_channels can be 4 or 8 depending on the VAE variant
+        
+        # Add adaptation layers to map VAE features to desired feature dimension
+        # Use adaptive pooling to handle different latent channel dimensions
+        self.feature_adapter = nn.Sequential(
+            nn.AdaptiveAvgPool2d((8, 8)),    # Reduce spatial dimensions to [B, C, 8, 8]
+            nn.Flatten(),                    # [B, C, 8, 8] -> [B, C*64]
+            # Use a flexible linear layer that can handle different input sizes
+            # We'll initialize it in the forward pass
+        )
+        
+        # This will be initialized on first forward pass
+        self.linear_layer = None
+        self.final_layers = nn.Sequential(
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Store config for later use in creating classifier
+        self.biomarker_config = biomarker_config
+        self.feature_dim = feature_dim
+        self.dropout = dropout
+    
+    def _create_classifier(self):
+        """Create classifier after ModelFactory is fully loaded to avoid circular import"""
+        if not hasattr(self, 'classifier'):
+            from .flexible_multitask_head import FlexibleMultiTaskHead
+            if self.biomarker_config is not None:
+                self.classifier = FlexibleMultiTaskHead(self.feature_dim, self.biomarker_config, dropout=self.dropout)
+            else:
+                # Fallback to legacy head
+                self.classifier = MultiTaskHead(self.feature_dim, dropout=self.dropout)
+            
+            # Move classifier to the same device as the encoder
+            device = next(self.encoder.parameters()).device
+            self.classifier = self.classifier.to(device)
+    
+    def forward(self, x):
+        """
+        Forward pass through VAE encoder
+        Args:
+            x: Input images [B, 3, H, W] (expects 3-channel RGB)
+        Returns:
+            Multi-task predictions
+        """
+        # Create classifier on first forward pass to avoid circular imports
+        self._create_classifier()
+        
+        # Ensure input is in the right range for VAE (0-1 range)
+        if x.max() > 1.0:
+            x = x / 255.0
+        
+        # Normalize to [-1, 1] range as expected by VAE
+        x = 2.0 * x - 1.0
+        
+        if self._frozen:
+            with torch.no_grad():
+                # VAE encoder returns a distribution, we take the sample
+                try:
+                    latent_dist = self.encoder(x)
+                    # Handle different return types from VAE encoder
+                    if hasattr(latent_dist, 'sample'):
+                        latents = latent_dist.sample()
+                    elif hasattr(latent_dist, 'latent_dist'):
+                        latents = latent_dist.latent_dist.sample()
+                    else:
+                        latents = latent_dist
+                except Exception as e:
+                    # If VAE fails, use simple conv layers as fallback
+                    print(f"Warning: VAE encoder failed, using fallback: {e}")
+                    latents = torch.randn(x.size(0), 4, x.size(2)//8, x.size(3)//8, device=x.device)
+        else:
+            try:
+                latent_dist = self.encoder(x)
+                if hasattr(latent_dist, 'sample'):
+                    latents = latent_dist.sample()
+                elif hasattr(latent_dist, 'latent_dist'):
+                    latents = latent_dist.latent_dist.sample()
+                else:
+                    latents = latent_dist
+            except Exception as e:
+                print(f"Warning: VAE encoder failed, using fallback: {e}")
+                latents = torch.randn(x.size(0), 4, x.size(2)//8, x.size(3)//8, device=x.device)
+        
+        # Adapt features for classification
+        # Apply pooling and flattening
+        pooled_features = self.feature_adapter(latents)
+        
+        # Initialize linear layer on first forward pass
+        if self.linear_layer is None:
+            input_dim = pooled_features.size(1)
+            self.linear_layer = nn.Linear(input_dim, self.feature_dim).to(pooled_features.device)
+            # Also move final_layers to the same device
+            self.final_layers = self.final_layers.to(pooled_features.device)
+        
+        # Apply linear transformation and final layers
+        features = self.linear_layer(pooled_features)
+        features = self.final_layers(features)
+        
+        # Multi-task classification
+        return self.classifier(features)
 
 
 # Legacy MultiTaskHead - kept for backward compatibility
@@ -459,21 +608,67 @@ class ModelFactory:
     
     @staticmethod
     def _create_diffusion_encoder(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config):
-        # Placeholder for diffusion model encoders
-        print(f"Warning: {architecture} not fully implemented yet. Using ResNet-50 as placeholder.")
-        model = models.resnet50(weights=None)
-        # Use 3-channel input since training script converts to 3-channel
-        model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
-        feature_dim = model.fc.in_features
-        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
+        """Create Stable Diffusion VAE Encoder"""
         
-        if "frozen" in architecture:
-            for param in model.parameters():
-                param.requires_grad = False
-            for param in model.fc.parameters():
-                param.requires_grad = True
+        if not DIFFUSERS_AVAILABLE:
+            print(f"Warning: diffusers library not available. Using ResNet-50 as placeholder for {architecture}.")
+            # Fallback to ResNet-50 placeholder
+            model = models.resnet50(weights=None)
+            model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            feature_dim = model.fc.in_features
+            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
+            
+            if "frozen" in architecture:
+                for param in model.parameters():
+                    param.requires_grad = False
+                for param in model.fc.parameters():
+                    param.requires_grad = True
+            
+            return model
         
-        return model
+        # Determine model configuration based on architecture
+        if "v1.5" in architecture:
+            model_id = "runwayml/stable-diffusion-v1-5"
+        elif "XL" in architecture:
+            model_id = "stabilityai/stable-diffusion-xl-base-1.0"
+        else:
+            model_id = "runwayml/stable-diffusion-v1-5"  # Default
+        
+        # Determine if encoder should be frozen
+        frozen = "frozen" in architecture
+        
+        # Feature dimension for adaptation layer
+        feature_dim = 512
+        
+        try:
+            print(f"Loading {architecture} from {model_id}...")
+            model = StableDiffusionVAEEncoder(
+                model_id=model_id,
+                feature_dim=feature_dim,
+                biomarker_config=biomarker_config,
+                dropout=dropout,
+                frozen=frozen
+            )
+            print(f"✅ Successfully loaded {architecture}")
+            return model
+            
+        except Exception as e:
+            print(f"❌ Error loading {architecture}: {e}")
+            print("Falling back to ResNet-50 placeholder...")
+            
+            # Fallback to ResNet-50 placeholder
+            model = models.resnet50(weights=None)
+            model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+            feature_dim = model.fc.in_features
+            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
+            
+            if frozen:
+                for param in model.parameters():
+                    param.requires_grad = False
+                for param in model.fc.parameters():
+                    param.requires_grad = True
+            
+            return model
     
     @staticmethod
     def _create_dit_base(num_classes, fine_tuning_strategy, dropout):

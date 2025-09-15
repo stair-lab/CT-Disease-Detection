@@ -223,6 +223,9 @@ def main():
     parser.add_argument('--enable_lr_search', 
                        action='store_true',
                        help='Enable learning rate hyperparameter search (expands experiments)')
+    parser.add_argument('--learning_rate', 
+                       type=float,
+                       help='Specific learning rate for single experiment (overrides enable_lr_search)')
     parser.add_argument('--turing1_only', 
                        action='store_true',
                        help='Run only experiments compatible with Turing1 GPUs (RTX 2080 Ti, 11GB)')
@@ -245,6 +248,17 @@ def main():
                        help='Run experiments sequentially instead of trying to optimize GPU usage')
     
     args = parser.parse_args()
+    
+    # Validate arguments
+    if args.learning_rate is not None and args.enable_lr_search:
+        print("❌ Error: Cannot use both --learning_rate and --enable_lr_search simultaneously")
+        print("   Use --learning_rate for a specific learning rate, or --enable_lr_search to test multiple rates")
+        sys.exit(1)
+    
+    if args.learning_rate is not None and not args.model_name:
+        print("❌ Error: --learning_rate requires --model_name to be specified")
+        print("   Specific learning rates can only be used with specific models")
+        sys.exit(1)
     
     # Setup logging
     logger, log_file = setup_logging(args.log_file)
@@ -317,8 +331,16 @@ def main():
             print(f"Available models: {', '.join(available_models)}")
             sys.exit(1)
         
-        # Expand learning rates if requested
-        if args.enable_lr_search:
+        # Handle learning rate specification
+        if args.learning_rate is not None:
+            # Use specific learning rate (overrides enable_lr_search)
+            config.learning_rate = [args.learning_rate]
+            # Regenerate experiment name with the specific learning rate
+            config.experiment_name = config._generate_experiment_name()
+            configs_to_run = [config]
+            print(f"🎯 Using specific learning rate: {args.learning_rate} for {args.model_name}")
+        elif args.enable_lr_search:
+            # Expand learning rates if requested
             configs_to_run = config.generate_lr_experiments()
             print(f"🔍 Learning rate search enabled: {len(configs_to_run)} experiments for {args.model_name}")
         else:
