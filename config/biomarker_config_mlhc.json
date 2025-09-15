@@ -1,6 +1,6 @@
 {
-  "experiment_name": "comorbidities_detection",
-  "description": "Multi-task learning for comorbidity detection from CT scans",
+  "experiment_name": "comorbidities_detection_mlhc_targets",
+  "description": "Multi-task learning for comorbidity detection from CT scans with MLHC targets",
   "binary_biomarkers": [
     {
       "name": "GENDER",
@@ -13,28 +13,13 @@
       "positive_class": "PRESENT"
     },
     {
-      "name": "HCC12",
-      "description": "HCC code 12",
-      "positive_class": "PRESENT"
-    },
-    {
       "name": "HCC18",
       "description": "HCC code 18",
       "positive_class": "PRESENT"
     },
     {
-      "name": "HCC19",
-      "description": "HCC code 19",
-      "positive_class": "PRESENT"
-    },
-    {
       "name": "HCC22",
       "description": "HCC code 22",
-      "positive_class": "PRESENT"
-    },
-    {
-      "name": "HCC48",
-      "description": "HCC code 48",
       "positive_class": "PRESENT"
     },
     {
