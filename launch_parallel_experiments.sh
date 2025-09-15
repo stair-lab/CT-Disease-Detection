@@ -5,21 +5,21 @@
 
 echo "🚀 LAUNCHING PARALLEL ResNet-34 MLHC Targets EXPERIMENTS"
 echo "=============================================================="
-echo "🎯 Model: ResNet-34 (MLHC Targets)"
-echo "🔧 Regularization: Dropout 0.1, Weight Decay 1e-05"
+echo "🎯 Model: ResNet-34 (MLHC Targets) regularized"
+echo "🔧 Regularization: Dropout 0.25, Weight Decay 1e-04"
 echo "💾 Memory requirement: 6-8GB per experiment"
-echo "🖥️ Available GPUs: 6 (GPUs 0, 1, 2, 3, 4, 6)"
+echo "🖥️ Available GPUs: 3 (GPUs 3, 4, 6)"
 echo "📊 Learning rates: [1e-5, 1e-4, 1e-3] = 3 experiments"
 echo ""
 
 # Configuration
 PYTHON_PATH="/lfs/turing1/0/mahmedc/miniconda3/envs/mahmedc_env/bin/python"
 MODEL_NAME="ResNet-34"
-AVAILABLE_GPUS=(0 1 2 3 4 6)
+AVAILABLE_GPUS=(3 4 6)
 LEARNING_RATES=(1e-5 1e-4 1e-3)
 
 # Now we can run true parallel experiments with specific learning rates on different GPUs!
-echo "🏃 Starting parallel ResNet-34 MLHC Targets experiments..."
+echo "🏃 Starting parallel ResNet-34 MLHC Targets Regularized experiments..."
 
 # Base command template
 BASE_CMD="$PYTHON_PATH run_experiments.py \
@@ -36,7 +36,7 @@ BASE_CMD="$PYTHON_PATH run_experiments.py \
 for i in "${!LEARNING_RATES[@]}"; do
     LR="${LEARNING_RATES[$i]}"
     GPU="${AVAILABLE_GPUS[$i]}"
-    SESSION_NAME="resnet_34_mlhc_targets_lr_${LR}_gpu_${GPU}"
+    SESSION_NAME="resnet_34_mlhc_targets_lr_regularized_${LR}_gpu_${GPU}"
     
     echo "  📋 GPU $GPU: Learning rate $LR (tmux: $SESSION_NAME)"
     
@@ -70,4 +70,4 @@ echo ""
 echo "📊 Check GPU usage:"
 echo "  watch -n 5 nvidia-smi"
 echo ""
-echo "📁 Results will be saved in: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models/mlhc_targets"
+echo "📁 Results will be saved in: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models/mlhc_targets/regularized"
