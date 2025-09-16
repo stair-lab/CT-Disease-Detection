@@ -171,7 +171,7 @@ def setup_logging(log_file=None):
     """Setup logging to both console and file"""
     if log_file is None:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = f"experiments_{timestamp}.log"
+        log_file = f"experiment_logs/experiments_{timestamp}.log"
     
     # Create logger
     logger = logging.getLogger()

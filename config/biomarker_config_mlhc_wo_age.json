@@ -1,0 +1,87 @@
+{
+  "experiment_name": "comorbidities_detection_mlhc_targets_wo_age",
+  "description": "Multi-task learning for comorbidity detection from CT scans with MLHC targets without age",
+  "binary_biomarkers": [
+    {
+      "name": "GENDER",
+      "description": "Patient gender (male=1, female=0)",
+      "positive_class": "male"
+    },
+    {
+      "name": "MORTALITY",
+      "description": "Death status",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "HCC18",
+      "description": "HCC code 18",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "HCC22",
+      "description": "HCC code 22",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "HCC85",
+      "description": "HCC code 85",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "HCC96",
+      "description": "HCC code 96",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "HCC108",
+      "description": "HCC code 108",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "HCC111",
+      "description": "HCC code 111",
+      "positive_class": "PRESENT"
+    },
+    {
+      "name": "CALCIUMSCORING_ABDOMINALAGATSTON_BINARY",
+      "description": "High calcium score indicator (>1000)",
+      "positive_class": "PRESENT"
+    }
+  ],
+  "multiclass_biomarkers": [],
+  "continuous_biomarkers": [],
+  "preprocessing": {
+    "image_size": 256,
+    "normalize_images": true,
+    "convert_to_rgb": true
+  },
+  "training": {
+    "class_weighting": true,
+    "balanced_sampling": true
+  },
+  "validation": {
+    "threshold_optimization": true,
+    "optimization_metric": "f1_score",
+    "per_biomarker_thresholds": true,
+    "threshold_search_range": [
+      0.1,
+      0.9
+    ],
+    "threshold_search_steps": 9,
+    "fallback_threshold": 0.5,
+    "metrics": [
+      "auroc",
+      "accuracy",
+      "sensitivity",
+      "specificity",
+      "f1_score",
+      "precision",
+      "recall"
+    ],
+    "regression_metrics": [
+      "mse",
+      "mae",
+      "r2_score"
+    ]
+  }
+}
