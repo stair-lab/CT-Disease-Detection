@@ -80,6 +80,85 @@ class FlexibleMultiTaskHead(nn.Module):
         return torch.cat(outputs, dim=1)
 
 
+class LinearProbeMultiTaskHead(nn.Module):
+    """
+    True linear probe head - direct mapping from backbone features to task outputs
+    No shared layers, minimal parameters, maximum interpretability
+    """
+    
+    def __init__(self, input_dim: int, biomarker_config: FlexibleBiomarkerConfig, dropout: float = 0.0):
+        super().__init__()
+        
+        self.biomarker_config = biomarker_config
+        self.tensor_layout = biomarker_config.get_tensor_layout()
+        
+        # Optional minimal dropout (usually 0.0 for true linear probe)
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        
+        # Direct task-specific linear layers (no shared processing)
+        self.task_heads = nn.ModuleDict()
+        
+        # Binary classification heads - direct from backbone
+        for biomarker in biomarker_config.binary_biomarkers:
+            self.task_heads[f"binary_{biomarker.name}"] = nn.Linear(input_dim, 1)
+        
+        # Multiclass classification heads - direct from backbone  
+        for biomarker in biomarker_config.multiclass_biomarkers:
+            num_classes = len(biomarker.classes)
+            self.task_heads[f"multiclass_{biomarker.name}"] = nn.Linear(input_dim, num_classes)
+        
+        # Regression heads - direct from backbone
+        for biomarker in biomarker_config.continuous_biomarkers:
+            self.task_heads[f"continuous_{biomarker.name}"] = nn.Linear(input_dim, 1)
+        
+        # Initialize weights for better convergence
+        self._initialize_weights()
+    
+    def _initialize_weights(self):
+        """Initialize linear layer weights for stable training"""
+        for name, module in self.task_heads.items():
+            if isinstance(module, nn.Linear):
+                # Xavier/Glorot initialization for linear layers
+                nn.init.xavier_uniform_(module.weight)
+                nn.init.zeros_(module.bias)
+    
+    def forward(self, x):
+        """
+        Direct forward pass - no shared processing
+        
+        Args:
+            x: Backbone features [batch_size, input_dim] (e.g., [B, 512] from ResNet-34)
+            
+        Returns:
+            Concatenated outputs [batch_size, total_output_size]
+        """
+        # Optional dropout on backbone features (usually disabled)
+        features = self.dropout(x)  # [batch_size, input_dim]
+        
+        outputs = []
+        
+        # Binary outputs - direct linear transformation
+        for biomarker in self.biomarker_config.binary_biomarkers:
+            head_name = f"binary_{biomarker.name}"
+            binary_out = self.task_heads[head_name](features)  # [B, 1]
+            outputs.append(binary_out)
+        
+        # Multiclass outputs - direct linear transformation
+        for biomarker in self.biomarker_config.multiclass_biomarkers:
+            head_name = f"multiclass_{biomarker.name}"
+            multiclass_out = self.task_heads[head_name](features)  # [B, num_classes]
+            outputs.append(multiclass_out)
+        
+        # Regression outputs - direct linear transformation
+        for biomarker in self.biomarker_config.continuous_biomarkers:
+            head_name = f"continuous_{biomarker.name}"
+            regression_out = self.task_heads[head_name](features)  # [B, 1]
+            outputs.append(regression_out)
+        
+        # Concatenate all outputs
+        return torch.cat(outputs, dim=1)  # [batch_size, total_output_size]
+
+
 class FlexibleMultiTaskLoss(nn.Module):
     """Flexible multi-task loss function that adapts to biomarker configuration"""
     
