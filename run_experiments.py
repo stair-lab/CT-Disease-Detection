@@ -95,7 +95,7 @@ def is_experiment_completed(config, output_base_dir):
     # Check for completion markers
     completion_markers = [
         os.path.join(output_dir, 'training_complete.txt'),
-        os.path.join(output_dir, 'best_model.pth'),
+        os.path.join(output_dir, 'best_checkpoint.pth'),
         os.path.join(output_dir, 'final_results.json')
     ]
     
@@ -400,7 +400,7 @@ def main():
                 print(f"    {config.model} (needs {config.expected_gpu_memory})")
         
         configs_to_run = [config for config, _ in runnable_configs]
-        gpu_assignments = {config.model: gpu_id for config, gpu_id in runnable_configs}
+        gpu_assignments = {config.experiment_name: gpu_id for config, gpu_id in runnable_configs}
     else:
         gpu_assignments = {}
     
@@ -410,7 +410,7 @@ def main():
     print(f"{'#':<3} {'Model':<40} {'Memory':<12} {'LR':<10} {'Status':<15}")
     print("-" * 100)
     for i, config in enumerate(configs_to_run):
-        gpu_str = f"GPU {gpu_assignments.get(config.model, 'auto')}" if args.check_memory else "auto"
+        gpu_str = f"GPU {gpu_assignments.get(config.experiment_name, 'auto')}" if args.check_memory else "auto"
         output_dir = os.path.join(args.output_base_dir, config.experiment_name)
         exists_str = "EXISTS" if os.path.exists(output_dir) else "NEW"
         lr_str = f"{config.learning_rate[0]:.0e}" if config.learning_rate else "N/A"
@@ -472,7 +472,7 @@ def main():
         logger.info(f"{'='*60}")
         
         # Determine GPU to use
-        gpu_id = gpu_assignments.get(config.model) if args.check_memory else None
+        gpu_id = gpu_assignments.get(config.experiment_name) if args.check_memory else None
         
         # Add csv_path attribute for the run_single_experiment function
         config.csv_path = args.config_csv

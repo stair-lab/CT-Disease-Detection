@@ -485,7 +485,10 @@ class FlexibleMetricsCalculator:
             layout = self.tensor_layout[biomarker.name]
             
             pred_logits = predictions[:, layout.start_idx:layout.end_idx]
-            pred_probs = np.exp(pred_logits) / np.sum(np.exp(pred_logits), axis=1, keepdims=True)  # Softmax
+            # Numerically stable softmax
+            max_logits = np.max(pred_logits, axis=1, keepdims=True)
+            exp_logits = np.exp(pred_logits - max_logits)
+            pred_probs = exp_logits / (np.sum(exp_logits, axis=1, keepdims=True) + 1e-12)
             target_one_hot = targets[:, layout.start_idx:layout.end_idx]
             
             # Get predicted and true classes

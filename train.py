@@ -167,7 +167,7 @@ def create_balanced_sampler(dataset, biomarker_config: FlexibleBiomarkerConfig):
     all_targets = dataset.targets
     
     # Create sample weights based on inverse frequency
-    sample_weights = np.ones(len(dataset))
+    sample_weights = np.ones(len(dataset), dtype=np.float64)
     
     # Weight based on binary biomarkers
     for biomarker in biomarker_config.binary_biomarkers:
@@ -180,7 +180,10 @@ def create_balanced_sampler(dataset, biomarker_config: FlexibleBiomarkerConfig):
         for j, label in enumerate(labels):
             sample_weights[j] *= class_weights[int(label)]
     
-    return WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
+    # Convert to torch.DoubleTensor to prevent overflow and match WeightedRandomSampler expectations
+    sample_weights_tensor = torch.from_numpy(sample_weights).double()
+    
+    return WeightedRandomSampler(sample_weights_tensor, len(sample_weights_tensor), replacement=True)
 
 
 def train_epoch(model, dataloader, criterion, optimizer, device, metrics_calc):
