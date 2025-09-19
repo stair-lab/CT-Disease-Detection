@@ -66,7 +66,7 @@ CT-Disease-Detection/
 conda activate mahmedc_env
 
 # Install enhanced dependencies
-pip install -r requirements_enhanced.txt
+pip install -r requirements.txt
 ```
 
 ### 2. Verify Setup
