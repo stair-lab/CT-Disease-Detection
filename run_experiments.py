@@ -133,6 +133,19 @@ def run_single_experiment(config, data_dir, biomarker_config_path, output_base_d
     if len(config.learning_rate) == 1:
         cmd.extend(['--learning_rate', str(config.learning_rate[0])])
     
+    # Add GradNorm parameters if enabled globally
+    # These will be passed to train.py which can override per-experiment settings
+    gradnorm_alpha = os.environ.get('GRADNORM_ALPHA')
+    gradnorm_update_freq = os.environ.get('GRADNORM_UPDATE_FREQ')
+    use_gradnorm = os.environ.get('USE_GRADNORM')
+    
+    if use_gradnorm == '1':
+        cmd.extend(['--use_gradnorm'])
+        if gradnorm_alpha:
+            cmd.extend(['--gradnorm_alpha', gradnorm_alpha])
+        if gradnorm_update_freq:
+            cmd.extend(['--gradnorm_update_freq', gradnorm_update_freq])
+    
     # Set GPU environment variable if specified
     env = os.environ.copy()
     if gpu_id is not None:
@@ -246,6 +259,17 @@ def main():
     parser.add_argument('--sequential', 
                        action='store_true',
                        help='Run experiments sequentially instead of trying to optimize GPU usage')
+    parser.add_argument('--use_gradnorm', 
+                       action='store_true',
+                       help='Enable GradNorm for multi-task loss balancing')
+    parser.add_argument('--gradnorm_alpha', 
+                       type=float, 
+                       default=0.16,
+                       help='GradNorm restoring force strength (default: 0.16)')
+    parser.add_argument('--gradnorm_update_freq', 
+                       type=int, 
+                       default=10,
+                       help='Update GradNorm weights every N iterations (default: 10)')
     
     args = parser.parse_args()
     
@@ -458,6 +482,18 @@ def main():
         if response.lower() not in ['y', 'yes']:
             logger.info("❌ Aborted by user")
             return
+    
+    # Set GradNorm environment variables if enabled
+    if args.use_gradnorm:
+        os.environ['USE_GRADNORM'] = '1'
+        os.environ['GRADNORM_ALPHA'] = str(args.gradnorm_alpha)
+        os.environ['GRADNORM_UPDATE_FREQ'] = str(args.gradnorm_update_freq)
+        logger.info(f"🔄 GradNorm enabled globally: alpha={args.gradnorm_alpha}, update_freq={args.gradnorm_update_freq}")
+    else:
+        # Clean environment variables
+        os.environ.pop('USE_GRADNORM', None)
+        os.environ.pop('GRADNORM_ALPHA', None)
+        os.environ.pop('GRADNORM_UPDATE_FREQ', None)
     
     # Run experiments
     logger.info(f"\n🏃 Starting experiments...")

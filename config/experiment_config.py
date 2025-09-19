@@ -43,6 +43,11 @@ class ExperimentConfig:
     experiment_name: str = ""
     output_dir: str = ""
     
+    # GradNorm configuration
+    use_gradnorm: bool = False
+    gradnorm_alpha: float = 0.16
+    gradnorm_update_freq: int = 10
+    
     def __post_init__(self):
         """Process configuration after initialization"""
         # Parse learning rates if they're in string format
@@ -204,7 +209,11 @@ class ExperimentConfigLoader:
                     architectural_family=row['Architectural_Family'],
                     class_weighting=row['Class_Weighting'],
                     sampling_strategy=row['Sampling_Strategy'],
-                    threshold_selection=row['Threshold_Selection']
+                    threshold_selection=row['Threshold_Selection'],
+                    # GradNorm configuration (optional columns)
+                    use_gradnorm=row.get('Use_GradNorm', 'No') == 'Yes' if 'Use_GradNorm' in row and not pd.isna(row['Use_GradNorm']) else False,
+                    gradnorm_alpha=float(row['GradNorm_Alpha']) if 'GradNorm_Alpha' in row and not pd.isna(row['GradNorm_Alpha']) else 0.16,
+                    gradnorm_update_freq=int(row['GradNorm_Update_Freq']) if 'GradNorm_Update_Freq' in row and not pd.isna(row['GradNorm_Update_Freq']) else 10
                 )
                 
                 # Add Turing1 compatibility if column exists

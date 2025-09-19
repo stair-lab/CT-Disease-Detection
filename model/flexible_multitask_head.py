@@ -572,13 +572,18 @@ class FlexibleMetricsCalculator:
             regression_metrics = self.calculate_regression_metrics(predictions, targets)
             all_metrics.update(regression_metrics)
         
-        # Calculate average AUROC for model selection
+        # Calculate both average and median AUROC for comprehensive monitoring
         auroc_values = []
         for biomarker_name, metrics in all_metrics.items():
             if isinstance(metrics, dict) and 'auroc' in metrics:
                 auroc_values.append(metrics['auroc'])
         
-        all_metrics['average_auroc'] = float(np.mean(auroc_values)) if auroc_values else 0.0
+        if auroc_values:
+            all_metrics['average_auroc'] = float(np.mean(auroc_values))
+            all_metrics['median_auroc'] = float(np.median(auroc_values))
+        else:
+            all_metrics['average_auroc'] = 0.0
+            all_metrics['median_auroc'] = 0.0
         
         return all_metrics
 

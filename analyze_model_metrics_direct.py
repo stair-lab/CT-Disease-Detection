@@ -9,31 +9,36 @@ import re
 import csv
 import json
 import glob
+import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 import statistics
 
-def extract_auroc_from_line(line: str) -> Tuple[float, float]:
+def extract_auroc_from_line(line: str) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
-    Extract Train Avg AUROC and Val Avg AUROC from a log line.
+    Extract Train Avg AUROC, Val Avg AUROC, Train Median AUROC, and Val Median AUROC from a log line.
     
     Args:
         line: Log line containing AUROC information
         
     Returns:
-        Tuple of (train_auroc, val_auroc) or (None, None) if not found
+        Tuple of (train_avg_auroc, val_avg_auroc, train_median_auroc, val_median_auroc) or (None, None, None, None) if not found
     """
     # Pattern to match: "Train Avg AUROC: 0.8079, Val Avg AUROC: 0.8116"
-    pattern = r'Train Avg AUROC: ([\d.]+), Val Avg AUROC: ([\d.]+)'
-    match = re.search(pattern, line)
+    avg_pattern = r'Train Avg AUROC: ([\d.]+), Val Avg AUROC: ([\d.]+)'
+    avg_match = re.search(avg_pattern, line)
     
-    if match:
-        train_auroc = float(match.group(1))
-        val_auroc = float(match.group(2))
-        return train_auroc, val_auroc
+    # Pattern to match: "Train Median AUROC: 0.7771, Val Median AUROC: 0.4614"
+    median_pattern = r'Train Median AUROC: ([\d.]+), Val Median AUROC: ([\d.]+)'
+    median_match = re.search(median_pattern, line)
     
-    return None, None
+    train_avg_auroc = float(avg_match.group(1)) if avg_match else None
+    val_avg_auroc = float(avg_match.group(2)) if avg_match else None
+    train_median_auroc = float(median_match.group(1)) if median_match else None
+    val_median_auroc = float(median_match.group(2)) if median_match else None
+    
+    return train_avg_auroc, val_avg_auroc, train_median_auroc, val_median_auroc
 
 def extract_biomarker_metrics(log_lines: List[str], best_epoch_line_idx: int) -> List[Dict[str, Any]]:
     """
@@ -128,41 +133,50 @@ def extract_biomarker_metrics(log_lines: List[str], best_epoch_line_idx: int) ->
     
     return biomarker_metrics
 
-def find_best_epoch_metrics(log_file_path: str) -> Tuple[float, float, List[Dict[str, Any]]]:
+def find_best_epoch_metrics(log_file_path: str) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float], List[Dict[str, Any]]]:
     """
-    Find the best validation AUROC and extract corresponding metrics.
+    Find the best validation median AUROC and extract corresponding metrics.
     
     Args:
         log_file_path: Path to the training progress log file
         
     Returns:
-        Tuple of (best_val_auroc, corresponding_train_auroc, biomarker_metrics)
+        Tuple of (best_val_avg_auroc, best_train_avg_auroc, best_val_median_auroc, best_train_median_auroc, biomarker_metrics)
     """
     try:
         with open(log_file_path, 'r') as f:
             lines = f.readlines()
     except Exception as e:
         print(f"Error reading log file {log_file_path}: {e}")
-        return None, None, []
+        return None, None, None, None, []
     
-    best_val_auroc = 0.0
-    best_train_auroc = 0.0
+    best_val_avg_auroc = 0.0
+    best_train_avg_auroc = 0.0
+    best_val_median_auroc = 0.0
+    best_train_median_auroc = 0.0
     best_epoch_line_idx = -1
     
-    # Find the best validation AUROC
-    for i, line in enumerate(lines):
-        train_auroc, val_auroc = extract_auroc_from_line(line)
-        if val_auroc is not None and val_auroc > best_val_auroc:
-            best_val_auroc = val_auroc
-            best_train_auroc = train_auroc
-            best_epoch_line_idx = i
+    # Find the best validation median AUROC (using median as the selection criterion)
+    # Look for both average and median AUROC in consecutive lines
+    for i in range(len(lines) - 1):
+        # Check current line for average AUROC
+        train_avg, val_avg, _, _ = extract_auroc_from_line(lines[i])
+        # Check next line for median AUROC
+        _, _, train_median, val_median = extract_auroc_from_line(lines[i + 1])
+        
+        if val_median is not None and val_median > best_val_median_auroc:
+            best_val_median_auroc = val_median
+            best_train_median_auroc = train_median if train_median is not None else 0.0
+            best_val_avg_auroc = val_avg if val_avg is not None else 0.0
+            best_train_avg_auroc = train_avg if train_avg is not None else 0.0
+            best_epoch_line_idx = i + 1  # Use the median line as reference
     
     # Extract biomarker metrics for the best epoch
     biomarker_metrics = []
     if best_epoch_line_idx >= 0:
         biomarker_metrics = extract_biomarker_metrics(lines, best_epoch_line_idx)
     
-    return best_val_auroc, best_train_auroc, biomarker_metrics
+    return best_val_avg_auroc, best_train_avg_auroc, best_val_median_auroc, best_train_median_auroc, biomarker_metrics
 
 def calculate_median_auroc(biomarker_metrics: List[Dict[str, Any]]) -> Tuple[Optional[float], Optional[str]]:
     """
@@ -211,7 +225,42 @@ def scan_models_directory(models_dir: str) -> List[Dict[str, Any]]:
     """
     results = []
     
-    # Get all biomarker config type directories
+    # Check if the given directory contains model directories directly
+    direct_model_dirs = [d for d in os.listdir(models_dir) 
+                        if os.path.isdir(os.path.join(models_dir, d)) 
+                        and not d.startswith('.')
+                        and '_lr' in d]  # Model directories typically contain '_lr'
+    
+    if direct_model_dirs:
+        # Process models directly in the given directory
+        print(f"Processing models directly in directory: {models_dir}")
+        for model_dir in direct_model_dirs:
+            model_path = os.path.join(models_dir, model_dir)
+            log_file = os.path.join(model_path, 'logs', 'training_progress.log')
+            
+            if os.path.exists(log_file):
+                print(f"  Processing model: {model_dir}")
+                val_avg_auroc, train_avg_auroc, val_median_auroc, train_median_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
+                
+                if val_median_auroc is not None:
+                    median_auroc, median_biomarker = calculate_median_auroc(biomarker_metrics)
+                    
+                    result = {
+                        'biomarker_config_type': 'direct',  # No specific config type for direct models
+                        'model_name': model_dir,
+                        'best_val_avg_auroc': val_avg_auroc,
+                        'best_train_avg_auroc': train_avg_auroc,
+                        'best_val_median_auroc': val_median_auroc,
+                        'best_train_median_auroc': train_median_auroc,
+                        'biomarker_median_auroc': median_auroc,
+                        'biomarker_median_auroc_biomarker': median_biomarker,
+                        'biomarker_metrics': biomarker_metrics,
+                        'flags': []  # No flags for direct models
+                    }
+                    results.append(result)
+        return results
+    
+    # If no direct model directories, look for biomarker config type directories
     biomarker_config_dirs = [d for d in os.listdir(models_dir) 
                            if os.path.isdir(os.path.join(models_dir, d)) 
                            and not d.startswith('.')]
@@ -239,18 +288,20 @@ def scan_models_directory(models_dir: str) -> List[Dict[str, Any]]:
                 
                 if os.path.exists(log_file):
                     print(f"  Processing model: {model_dir}")
-                    val_auroc, train_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
+                    val_avg_auroc, train_avg_auroc, val_median_auroc, train_median_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
                     
-                    if val_auroc is not None:
+                    if val_median_auroc is not None:
                         median_auroc, median_biomarker = calculate_median_auroc(biomarker_metrics)
                         
                         result = {
                             'biomarker_config_type': config_type,
                             'model_name': model_dir,
-                            'best_val_auroc': val_auroc,
-                            'corresponding_train_auroc': train_auroc,
-                            'median_auroc': median_auroc,
-                            'median_auroc_biomarker': median_biomarker,
+                            'best_val_avg_auroc': val_avg_auroc,
+                            'best_train_avg_auroc': train_avg_auroc,
+                            'best_val_median_auroc': val_median_auroc,
+                            'best_train_median_auroc': train_median_auroc,
+                            'biomarker_median_auroc': median_auroc,
+                            'biomarker_median_auroc_biomarker': median_biomarker,
                             'biomarker_metrics': biomarker_metrics,
                             'flags': []  # No flags for direct models
                         }
@@ -290,18 +341,20 @@ def scan_models_directory(models_dir: str) -> List[Dict[str, Any]]:
                             
                             if os.path.exists(log_file):
                                 print(f"    Processing nested model: {model_dir}")
-                                val_auroc, train_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
+                                val_avg_auroc, train_avg_auroc, val_median_auroc, train_median_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
                                 
-                                if val_auroc is not None:
+                                if val_median_auroc is not None:
                                     median_auroc, median_biomarker = calculate_median_auroc(biomarker_metrics)
                                     
                                     result = {
                                         'biomarker_config_type': config_type,
                                         'model_name': model_dir,
-                                        'best_val_auroc': val_auroc,
-                                        'corresponding_train_auroc': train_auroc,
-                                        'median_auroc': median_auroc,
-                                        'median_auroc_biomarker': median_biomarker,
+                                        'best_val_avg_auroc': val_avg_auroc,
+                                        'best_train_avg_auroc': train_avg_auroc,
+                                        'best_val_median_auroc': val_median_auroc,
+                                        'best_train_median_auroc': train_median_auroc,
+                                        'biomarker_median_auroc': median_auroc,
+                                        'biomarker_median_auroc_biomarker': median_biomarker,
                                         'biomarker_metrics': biomarker_metrics,
                                         'flags': [subdir, nested_subdir]
                                     }
@@ -314,18 +367,20 @@ def scan_models_directory(models_dir: str) -> List[Dict[str, Any]]:
                         
                         if os.path.exists(log_file):
                             print(f"    Processing model: {model_dir}")
-                            val_auroc, train_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
+                            val_avg_auroc, train_avg_auroc, val_median_auroc, train_median_auroc, biomarker_metrics = find_best_epoch_metrics(log_file)
                             
-                            if val_auroc is not None:
+                            if val_median_auroc is not None:
                                 median_auroc, median_biomarker = calculate_median_auroc(biomarker_metrics)
                                 
                                 result = {
                                     'biomarker_config_type': config_type,
                                     'model_name': model_dir,
-                                    'best_val_auroc': val_auroc,
-                                    'corresponding_train_auroc': train_auroc,
-                                    'median_auroc': median_auroc,
-                                    'median_auroc_biomarker': median_biomarker,
+                                    'best_val_avg_auroc': val_avg_auroc,
+                                    'best_train_avg_auroc': train_avg_auroc,
+                                    'best_val_median_auroc': val_median_auroc,
+                                    'best_train_median_auroc': train_median_auroc,
+                                    'biomarker_median_auroc': median_auroc,
+                                    'biomarker_median_auroc_biomarker': median_biomarker,
                                     'biomarker_metrics': biomarker_metrics,
                                     'flags': [subdir]
                                 }
@@ -354,10 +409,12 @@ def write_results_to_csv(results: List[Dict[str, Any]], output_path: str):
     columns = [
         'biomarker_config_type',
         'model_name',
-        'best_val_auroc',
-        'corresponding_train_auroc',
-        'median_auroc',
-        'median_auroc_biomarker',
+        'best_val_avg_auroc',
+        'best_train_avg_auroc',
+        'best_val_median_auroc',
+        'best_train_median_auroc',
+        'biomarker_median_auroc',
+        'biomarker_median_auroc_biomarker',
         'biomarker_metrics_json',
         'num_biomarkers'
     ]
@@ -374,10 +431,12 @@ def write_results_to_csv(results: List[Dict[str, Any]], output_path: str):
             row = {
                 'biomarker_config_type': result['biomarker_config_type'],
                 'model_name': result['model_name'],
-                'best_val_auroc': result['best_val_auroc'],
-                'corresponding_train_auroc': result['corresponding_train_auroc'],
-                'median_auroc': result['median_auroc'],
-                'median_auroc_biomarker': result['median_auroc_biomarker'],
+                'best_val_avg_auroc': result['best_val_avg_auroc'],
+                'best_train_avg_auroc': result['best_train_avg_auroc'],
+                'best_val_median_auroc': result['best_val_median_auroc'],
+                'best_train_median_auroc': result['best_train_median_auroc'],
+                'biomarker_median_auroc': result['biomarker_median_auroc'],
+                'biomarker_median_auroc_biomarker': result['biomarker_median_auroc_biomarker'],
                 'biomarker_metrics_json': json.dumps(result['biomarker_metrics']),
                 'num_biomarkers': len(result['biomarker_metrics'])
             }
@@ -393,16 +452,32 @@ def write_results_to_csv(results: List[Dict[str, Any]], output_path: str):
 
 def main():
     """Main function to run the analysis."""
-    # Set up paths
-    models_dir = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/models"
-    output_dir = "/lfs/turing1/0/mahmedc/Comorbidities-Detection"
+    parser = argparse.ArgumentParser(description='Analyze model metrics from Comorbidities-Detection models directory (direct model directories)')
+    parser.add_argument('--models_dir', type=str, 
+                       default="/lfs/turing1/0/mahmedc/Comorbidities-Detection/models",
+                       help='Path to the models directory (default: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models)')
+    parser.add_argument('--output_dir', type=str,
+                       default="/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection",
+                       help='Path to the output directory (default: /lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection)')
+    parser.add_argument('--output_filename', type=str,
+                       help='Output filename (default: model_metrics_summary_TIMESTAMP.csv)')
     
-    # Generate timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_filename = f"model_metrics_summary_{timestamp}.csv"
+    args = parser.parse_args()
+    
+    # Set up paths
+    models_dir = args.models_dir
+    output_dir = args.output_dir
+    
+    # Generate timestamp and filename
+    if args.output_filename:
+        output_filename = args.output_filename
+    else:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_filename = f"model_metrics_direct_{timestamp}.csv"
+    
     output_path = os.path.join(output_dir, output_filename)
     
-    print(f"Starting model metrics analysis...")
+    print(f"Starting direct model metrics analysis...")
     print(f"Models directory: {models_dir}")
     print(f"Output file: {output_path}")
     

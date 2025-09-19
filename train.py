@@ -26,6 +26,7 @@ from typing import Dict, List, Tuple, Any
 from dataset import ClassifierDataset
 from model.model_factory import ModelFactory
 from model.flexible_multitask_head import FlexibleMultiTaskLoss, FlexibleMetricsCalculator
+from model.gradnorm_loss import GradNormLoss, GradNormTrainer
 from config.biomarker_config import FlexibleBiomarkerConfig
 from config.experiment_config import (
     ExperimentConfigLoader, ExperimentConfig, 
@@ -186,7 +187,7 @@ def create_balanced_sampler(dataset, biomarker_config: FlexibleBiomarkerConfig):
     return WeightedRandomSampler(sample_weights_tensor, len(sample_weights_tensor), replacement=True)
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, metrics_calc):
+def train_epoch(model, dataloader, criterion, optimizer, device, metrics_calc, gradnorm_trainer=None):
     """Train for one epoch"""
     model.train()
     
@@ -206,8 +207,11 @@ def train_epoch(model, dataloader, criterion, optimizer, device, metrics_calc):
         # Forward pass
         predictions = model(images)
         
-        # Calculate loss
-        loss, loss_dict = criterion(predictions, targets)
+        # Calculate loss - use GradNorm if available
+        if gradnorm_trainer is not None:
+            loss, loss_dict = gradnorm_trainer.compute_loss(model, predictions, targets)
+        else:
+            loss, loss_dict = criterion(predictions, targets)
         
         # Backward pass
         optimizer.zero_grad()
@@ -399,18 +403,41 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     logger.info(f"Total parameters: {total_params:,}")
     logger.info(f"Trainable parameters: {trainable_params:,}")
     
-    # Create loss function
-    criterion = FlexibleMultiTaskLoss(biomarker_config, class_weights=class_weights)
+    # Create loss function - check if GradNorm is enabled
+    use_gradnorm = getattr(config, 'use_gradnorm', False)
+    gradnorm_trainer = None
+    
+    if use_gradnorm:
+        logger.info("🔄 Using GradNorm for loss balancing")
+        gradnorm_alpha = getattr(config, 'gradnorm_alpha', 0.16)
+        gradnorm_update_freq = getattr(config, 'gradnorm_update_freq', 10)
+        
+        gradnorm_loss = GradNormLoss(
+            biomarker_config=biomarker_config,
+            class_weights=class_weights,
+            alpha=gradnorm_alpha,
+            update_weights_every=gradnorm_update_freq,
+            initial_task_loss_average_window=20,
+            normalize_losses=True,
+            restoring_force_factor=0.1
+        )
+        gradnorm_loss = gradnorm_loss.to(device)  # Move to correct device
+        gradnorm_trainer = GradNormTrainer(gradnorm_loss)
+        criterion = gradnorm_loss  # For validation
+    else:
+        criterion = FlexibleMultiTaskLoss(biomarker_config, class_weights=class_weights)
     
     # Create optimizer and scheduler
+    # Note: GradNorm task weights are updated manually, not through optimizer
     optimizer = create_optimizer(model.parameters(), config)
+    
     scheduler = create_scheduler(optimizer, config, epochs)
     
     # Create metrics calculator
     metrics_calc = FlexibleMetricsCalculator(biomarker_config)
     
     # Training loop
-    best_avg_auroc = 0.0
+    best_median_auroc = 0.0
     best_epoch = 0
     patience = 10
     patience_counter = 0
@@ -424,7 +451,7 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         
         # Training phase
         train_loss, train_metrics, train_loss_components = train_epoch(
-            model, train_loader, criterion, optimizer, device, metrics_calc
+            model, train_loader, criterion, optimizer, device, metrics_calc, gradnorm_trainer
         )
         
         # Validation phase
@@ -445,7 +472,21 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         writer.add_scalar('Loss/Validation', val_loss, epoch)
         writer.add_scalar('Metrics/Average_AUROC_Train', train_metrics['average_auroc'], epoch)
         writer.add_scalar('Metrics/Average_AUROC_Val', val_metrics['average_auroc'], epoch)
+        writer.add_scalar('Metrics/Median_AUROC_Train', train_metrics['median_auroc'], epoch)
+        writer.add_scalar('Metrics/Median_AUROC_Val', val_metrics['median_auroc'], epoch)
         writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
+        
+        # Log GradNorm weights if using GradNorm
+        if gradnorm_trainer is not None:
+            gradnorm_stats = gradnorm_trainer.get_training_stats()
+            task_weights = gradnorm_stats['task_weights']
+            
+            for task_name, weight in task_weights.items():
+                writer.add_scalar(f'GradNorm_Weights/{task_name}', weight, epoch)
+            
+            # Log GradNorm info
+            if gradnorm_stats['initial_losses_computed']:
+                training_logger.info(f"GradNorm task weights: {task_weights}")
         
         # Log individual biomarker metrics
         for biomarker in biomarker_config.binary_biomarkers:
@@ -461,6 +502,7 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         training_logger.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s")
         training_logger.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         training_logger.info(f"Train Avg AUROC: {train_metrics['average_auroc']:.4f}, Val Avg AUROC: {val_metrics['average_auroc']:.4f}")
+        training_logger.info(f"Train Median AUROC: {train_metrics['median_auroc']:.4f}, Val Median AUROC: {val_metrics['median_auroc']:.4f}")
         
         # Log individual biomarker validation metrics
         training_logger.info("Validation metrics per biomarker:")
@@ -488,13 +530,13 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
                     training_logger.info(f"  {biomarker.name}: MSE={biomarker_metrics['mse']:.4f}, "
                                        f"MAE={biomarker_metrics.get('mae', 0.0):.4f}")
         
-        # Save checkpoint if best model
-        is_best = val_metrics['average_auroc'] > best_avg_auroc
+        # Save checkpoint if best model (using median AUROC for selection)
+        is_best = val_metrics['median_auroc'] > best_median_auroc
         if is_best:
-            best_avg_auroc = val_metrics['average_auroc']
+            best_median_auroc = val_metrics['median_auroc']
             best_epoch = epoch + 1
             patience_counter = 0  # Reset patience counter
-            training_logger.info(f"🎯 New best model! Average AUROC: {best_avg_auroc:.4f}")
+            training_logger.info(f"🎯 New best model! Median AUROC: {best_median_auroc:.4f} (Avg: {val_metrics['average_auroc']:.4f})")
         else:
             patience_counter += 1
             training_logger.info(f"No improvement. Patience: {patience_counter}/{patience}")
@@ -516,7 +558,7 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
             'val_metrics': val_metrics,
             'config': config.to_dict(),
             'biomarker_config': biomarker_config.experiment_name,
-            'best_avg_auroc': best_avg_auroc,
+            'best_median_auroc': best_median_auroc,
             'best_epoch': best_epoch
         }
         
@@ -525,12 +567,12 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         if is_best:
             torch.save(checkpoint, os.path.join(output_dir, 'best_checkpoint.pth'))
     
-    logger.info(f"Training completed! Best model at epoch {best_epoch} with AUROC: {best_avg_auroc:.4f}")
+    logger.info(f"Training completed! Best model at epoch {best_epoch} with Median AUROC: {best_median_auroc:.4f}")
     
     # Close tensorboard writer
     writer.close()
     
-    return model, best_avg_auroc
+    return model, best_median_auroc
 
 
 def main():
@@ -545,6 +587,11 @@ def main():
     parser.add_argument('--model_name', help='Specific model to train')
     parser.add_argument('--learning_rate', type=float, help='Specific learning rate for this experiment')
     parser.add_argument('--experiment_name', help='Custom experiment name (overrides auto-generated name)')
+    
+    # GradNorm arguments
+    parser.add_argument('--use_gradnorm', action='store_true', help='Enable GradNorm for loss balancing')
+    parser.add_argument('--gradnorm_alpha', type=float, default=0.16, help='GradNorm restoring force strength')
+    parser.add_argument('--gradnorm_update_freq', type=int, default=10, help='Update GradNorm weights every N iterations')
     
     args = parser.parse_args()
     
@@ -569,6 +616,11 @@ def main():
         if args.learning_rate:
             config.learning_rate = [args.learning_rate]
         
+        # Override GradNorm settings if specified
+        config.use_gradnorm = args.use_gradnorm
+        config.gradnorm_alpha = args.gradnorm_alpha
+        config.gradnorm_update_freq = args.gradnorm_update_freq
+        
         configs_to_run = [config]
     else:
         # Train all must-include models
@@ -591,7 +643,7 @@ def main():
         output_dir = os.path.join(args.output_base_dir, config.experiment_name)
         
         try:
-            model, best_auroc = train_model(
+            model, best_median_auroc = train_model(
                 config=config,
                 data_dir=args.data_dir,
                 output_dir=output_dir,
@@ -602,7 +654,7 @@ def main():
             results.append({
                 'model': config.model,
                 'experiment_name': config.experiment_name,
-                'best_avg_auroc': best_auroc,
+                'best_median_auroc': best_median_auroc,
                 'status': 'completed'
             })
             
@@ -611,7 +663,7 @@ def main():
             results.append({
                 'model': config.model,
                 'experiment_name': config.experiment_name,
-                'best_avg_auroc': 0.0,
+                'best_median_auroc': 0.0,
                 'status': f'failed: {str(e)}'
             })
     
