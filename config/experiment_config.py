@@ -29,6 +29,7 @@ class ExperimentConfig:
     dropout: float
     loss_specific_params: str
     multi_target_strategy: str
+    single_target_strategy: str
     pretrained_weights: str
     fine_tuning_strategy: str
     
@@ -162,6 +163,7 @@ class ExperimentConfig:
             'dropout': self.dropout,
             'loss_specific_params': self.loss_specific_params,
             'multi_target_strategy': self.multi_target_strategy,
+            'single_target_strategy': self.single_target_strategy,
             'pretrained_weights': self.pretrained_weights,
             'fine_tuning_strategy': self.fine_tuning_strategy,
             'expected_gpu_memory': self.expected_gpu_memory,
@@ -203,6 +205,7 @@ class ExperimentConfigLoader:
                     dropout=float(row['Dropout']),
                     loss_specific_params=row['Loss-Specific Params'],
                     multi_target_strategy=row['Multi_Target_Strategy'],
+                    single_target_strategy=row['Single_Target_Strategy'],
                     pretrained_weights=row['Pretrained_Weights'],
                     fine_tuning_strategy=row['Fine_Tuning_Strategy'],
                     expected_gpu_memory=row['Expected_GPU_Memory'],

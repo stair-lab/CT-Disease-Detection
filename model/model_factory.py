@@ -219,7 +219,8 @@ class ModelFactory:
     
     @staticmethod
     def create_model(architecture, num_classes=13, pretrained_weights=None, 
-                    fine_tuning_strategy="full", dropout=0.1, biomarker_config=None, **kwargs):
+                    fine_tuning_strategy="full", dropout=0.1, biomarker_config=None, 
+                    single_target_strategy=None, **kwargs):
         """
         Create model based on architecture specification
         
@@ -230,94 +231,111 @@ class ModelFactory:
             fine_tuning_strategy: 'full', 'linear_probe', or 'partial'
             dropout: Dropout rate
             biomarker_config: FlexibleBiomarkerConfig instance (if None, uses legacy MultiTaskHead)
+            single_target_strategy: Single-target classification strategy from CSV
         """
         
         if architecture == "ResNet-18":
             return ModelFactory._create_resnet18(num_classes, pretrained_weights, 
-                                                fine_tuning_strategy, dropout, biomarker_config)
+                                                fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "ResNet-34":
             return ModelFactory._create_resnet34(num_classes, pretrained_weights, 
-                                                fine_tuning_strategy, dropout, biomarker_config)
+                                                fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "DenseNet-121":
             return ModelFactory._create_densenet121(num_classes, pretrained_weights, 
-                                                   fine_tuning_strategy, dropout, biomarker_config)
+                                                   fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "EfficientNet-B0":
             return ModelFactory._create_efficientnet_b0(num_classes, pretrained_weights, 
-                                                       fine_tuning_strategy, dropout, biomarker_config)
+                                                       fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "EfficientNet-B4":
             return ModelFactory._create_efficientnet_b4(num_classes, pretrained_weights, 
-                                                       fine_tuning_strategy, dropout, biomarker_config)
+                                                       fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "ConvNeXt-Base":
             return ModelFactory._create_convnext_base(num_classes, pretrained_weights, 
-                                                     fine_tuning_strategy, dropout, biomarker_config)
+                                                     fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture in ["ViT-Small (DINOv2)", "ViT-Base (DINOv2)", "ViT-Large (DINOv2)"]:
             return ModelFactory._create_dinov2_vit(architecture, num_classes, 
-                                                  fine_tuning_strategy, dropout, biomarker_config)
+                                                  fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "Swin Transformer-Base":
             return ModelFactory._create_swin_base(num_classes, pretrained_weights, 
-                                                 fine_tuning_strategy, dropout, biomarker_config)
+                                                 fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "MaxViT-Base":
             return ModelFactory._create_maxvit_base(num_classes, pretrained_weights, 
-                                                   fine_tuning_strategy, dropout, biomarker_config)
+                                                   fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture in ["CLIP-ViT-B/16 (full fine-tuning)", "CLIP-ViT-B/16 (frozen linear probe)"]:
             return ModelFactory._create_clip_vit_b16(architecture, num_classes, 
-                                                    fine_tuning_strategy, dropout, biomarker_config)
+                                                    fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "CLIP-ViT-L/14 (full fine-tuning)":
-            return ModelFactory._create_clip_vit_l14(num_classes, fine_tuning_strategy, dropout, biomarker_config)
+            return ModelFactory._create_clip_vit_l14(num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "BLIP-2 ViT-Base":
-            return ModelFactory._create_blip2_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config)
+            return ModelFactory._create_blip2_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture in ["MedGemma", "MedCLIP", "BiomedCLIP"]:
             return ModelFactory._create_medical_vlm(architecture, num_classes, 
-                                                   fine_tuning_strategy, dropout, biomarker_config)
+                                                   fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture in ["Stable Diffusion v1.5 VAE Encoder", 
                              "Stable Diffusion v1.5 VAE Encoder (frozen)",
                              "Stable Diffusion XL VAE Encoder"]:
             return ModelFactory._create_diffusion_encoder(architecture, num_classes, 
-                                                         fine_tuning_strategy, dropout, biomarker_config)
+                                                         fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "DiT-Base (Diffusion Transformer)":
-            return ModelFactory._create_dit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config)
+            return ModelFactory._create_dit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "MAE ViT-Base (self-supervised)":
-            return ModelFactory._create_mae_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config)
+            return ModelFactory._create_mae_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         elif architecture == "ResNet-50 (RadImageNet)":
-            return ModelFactory._create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout, biomarker_config)
+            return ModelFactory._create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy)
         
         else:
             raise ValueError(f"Unsupported architecture: {architecture}")
     
     @staticmethod
-    def _create_multitask_head(feature_dim, dropout, biomarker_config, head_type="flexible"):
+    def _create_multitask_head(
+        feature_dim, 
+        dropout, 
+        biomarker_config, 
+        head_type="flexible", 
+        single_target_strategy=None
+    ):
         """Create appropriate multi-task head based on configuration"""
         if biomarker_config is not None:
             if head_type == "linear_probe":
                 # True linear probe: direct backbone → tasks
                 from .flexible_multitask_head import LinearProbeMultiTaskHead
-                return LinearProbeMultiTaskHead(feature_dim, biomarker_config, dropout=dropout)
+                return LinearProbeMultiTaskHead(
+                    feature_dim, 
+                    biomarker_config, 
+                    dropout=dropout,
+                    single_target_strategy=single_target_strategy
+                )
             else:
                 # Standard flexible multi-task head with shared layers
                 from .flexible_multitask_head import FlexibleMultiTaskHead
-                return FlexibleMultiTaskHead(feature_dim, biomarker_config, dropout=dropout)
+                return FlexibleMultiTaskHead(
+                    feature_dim, 
+                    biomarker_config, 
+                    dropout=dropout,
+                    single_target_strategy=single_target_strategy
+                )
         else:
             # Use legacy multi-task head for backward compatibility
             return MultiTaskHead(feature_dim, dropout=dropout)
     
     @staticmethod
-    def _create_resnet18(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config):
+    def _create_resnet18(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -331,7 +349,7 @@ class ModelFactory:
         
         # Replace classifier with appropriate multi-task head
         feature_dim = model.fc.in_features
-        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -342,7 +360,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_resnet34(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config):
+    def _create_resnet34(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -350,7 +368,7 @@ class ModelFactory:
             model = models.resnet34(weights=ResNet34_Weights.IMAGENET1K_V1)
             # Keep 3-channel input for pretrained weights
             feature_dim = model.fc.in_features
-            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type)
+            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type, single_target_strategy)
         else:
             # Use existing custom ResNet34 with flexible head
             if biomarker_config is not None:
@@ -358,7 +376,7 @@ class ModelFactory:
                 model = ResNet34(num_classes=1)  # Temporary
                 # Replace with appropriate head type
                 feature_dim = model.fc.in_features if hasattr(model, 'fc') else 512
-                model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type)
+                model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type, single_target_strategy)
             else:
                 # Legacy behavior
                 model = ResNet34(num_classes=num_classes)
@@ -372,7 +390,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_densenet121(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_densenet121(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -386,7 +404,7 @@ class ModelFactory:
         
         # Replace classifier with appropriate multi-task head
         feature_dim = model.classifier.in_features
-        model.classifier = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.classifier = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -397,7 +415,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_efficientnet_b0(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_efficientnet_b0(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -411,7 +429,7 @@ class ModelFactory:
         
         # Replace classifier with appropriate multi-task head
         feature_dim = model.classifier[1].in_features
-        model.classifier = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.classifier = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -422,7 +440,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_efficientnet_b4(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_efficientnet_b4(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -436,7 +454,7 @@ class ModelFactory:
         
         # Replace classifier with appropriate multi-task head
         feature_dim = model.classifier[1].in_features
-        model.classifier = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.classifier = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -447,7 +465,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_convnext_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_convnext_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -462,7 +480,7 @@ class ModelFactory:
         
         # Replace classifier with appropriate multi-task head
         feature_dim = model.classifier[2].in_features
-        multitask_head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        multitask_head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         model.classifier = nn.Sequential(
             model.classifier[0],  # LayerNorm
             model.classifier[1],  # Flatten
@@ -478,7 +496,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_dinov2_vit(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config):
+    def _create_dinov2_vit(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -494,7 +512,7 @@ class ModelFactory:
         
         # Add appropriate multi-task head
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         # Keep 3-channel input since training script converts images to 3-channel
         # No need to modify patch_embed for single channel
@@ -508,7 +526,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_swin_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_swin_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -522,7 +540,7 @@ class ModelFactory:
         
         # Replace head with appropriate multi-task head
         feature_dim = model.head.in_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -533,7 +551,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_maxvit_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_maxvit_base(num_classes, pretrained_weights, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -542,7 +560,7 @@ class ModelFactory:
         
         # Add appropriate multi-task head
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         # Modify for single channel input - MaxViT uses stem
         if hasattr(model, 'stem') and hasattr(model.stem, 'conv1'):
@@ -561,7 +579,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_clip_vit_b16(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_clip_vit_b16(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -578,7 +596,7 @@ class ModelFactory:
                                           padding=old_conv.padding)
         
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if "frozen" in architecture or fine_tuning_strategy == "linear_probe":
             for param in model.parameters():
@@ -589,7 +607,7 @@ class ModelFactory:
         return model
     
     @staticmethod
-    def _create_clip_vit_l14(num_classes, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_clip_vit_l14(num_classes, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -605,12 +623,12 @@ class ModelFactory:
                                           padding=old_conv.padding)
         
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         return model
     
     @staticmethod
-    def _create_blip2_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_blip2_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -626,12 +644,12 @@ class ModelFactory:
                                           padding=old_conv.padding)
         
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         return model
     
     @staticmethod
-    def _create_medical_vlm(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_medical_vlm(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -647,12 +665,12 @@ class ModelFactory:
                                           padding=old_conv.padding)
         
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         return model
     
     @staticmethod
-    def _create_diffusion_encoder(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config):
+    def _create_diffusion_encoder(architecture, num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy=None):
         """Create Stable Diffusion VAE Encoder"""
         
         if not DIFFUSERS_AVAILABLE:
@@ -661,7 +679,7 @@ class ModelFactory:
             model = models.resnet50(weights=None)
             model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
             feature_dim = model.fc.in_features
-            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
+            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, single_target_strategy=single_target_strategy)
             
             if "frozen" in architecture:
                 for param in model.parameters():
@@ -705,7 +723,7 @@ class ModelFactory:
             model = models.resnet50(weights=None)
             model.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
             feature_dim = model.fc.in_features
-            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config)
+            model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, single_target_strategy=single_target_strategy)
             
             if frozen:
                 for param in model.parameters():
@@ -716,7 +734,7 @@ class ModelFactory:
             return model
     
     @staticmethod
-    def _create_dit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_dit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -732,12 +750,12 @@ class ModelFactory:
                                           padding=old_conv.padding)
         
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         return model
     
     @staticmethod
-    def _create_mae_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config=None):
+    def _create_mae_vit_base(num_classes, fine_tuning_strategy, dropout, biomarker_config=None, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
@@ -752,25 +770,104 @@ class ModelFactory:
                                           padding=old_conv.padding)
         
         feature_dim = model.num_features
-        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.head = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         return model
     
     @staticmethod
-    def _create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout, biomarker_config):
+    def _create_resnet50_radimgnet(num_classes, fine_tuning_strategy, dropout, biomarker_config, single_target_strategy=None):
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
-        # Placeholder for RadImageNet weights
-        print("Warning: RadImageNet weights not available. Using ImageNet ResNet-50.")
-        model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+        # Load RadImageNet pre-trained weights
+        try:
+            import torch
+            import os
+            
+            # Path to the RadImageNet checkpoint
+            radimagenet_path = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/radimagenet_ckpt/resnet50/ResNet50_RadImageNet.pt"
+            
+            if os.path.exists(radimagenet_path):
+                print(f"Loading ResNet-50 with RadImageNet weights from {radimagenet_path}")
+                
+                # Create model without pre-trained weights
+                model = models.resnet50(weights=None)
+                
+                # Load RadImageNet checkpoint
+                checkpoint = torch.load(radimagenet_path, map_location='cpu')
+                
+                # Handle different checkpoint formats
+                if 'model' in checkpoint:
+                    # If checkpoint contains 'model' key
+                    state_dict = checkpoint['model']
+                elif 'state_dict' in checkpoint:
+                    # If checkpoint contains 'state_dict' key
+                    state_dict = checkpoint['state_dict']
+                else:
+                    # If checkpoint is directly the state dict
+                    state_dict = checkpoint
+                
+                # Load the state dict, ignoring classifier layer (fc) since we'll replace it
+                model_state_dict = model.state_dict()
+                filtered_state_dict = {}
+                
+                for k, v in state_dict.items():
+                    # Skip the classifier layer (fc) as we'll replace it with our multi-task head
+                    if k.startswith('fc.') or k.startswith('classifier.'):
+                        continue
+                    
+                    # Map keys - handle the 'backbone.' prefix and layer numbering from RadImageNet
+                    mapped_key = k
+                    if k.startswith('backbone.'):
+                        # Remove 'backbone.' prefix
+                        mapped_key = k[9:]
+                        
+                        # Map RadImageNet layer numbers to standard ResNet layer numbers
+                        # RadImageNet: backbone.4 -> layer1, backbone.5 -> layer2, backbone.6 -> layer3, backbone.7 -> layer4
+                        if mapped_key.startswith('4.'):
+                            mapped_key = 'layer1.' + mapped_key[2:]
+                        elif mapped_key.startswith('5.'):
+                            mapped_key = 'layer2.' + mapped_key[2:]
+                        elif mapped_key.startswith('6.'):
+                            mapped_key = 'layer3.' + mapped_key[2:]
+                        elif mapped_key.startswith('7.'):
+                            mapped_key = 'layer4.' + mapped_key[2:]
+                        elif mapped_key.startswith('0.'):
+                            mapped_key = 'conv1.' + mapped_key[2:]
+                        elif mapped_key.startswith('1.'):
+                            mapped_key = 'bn1.' + mapped_key[2:]
+                            
+                    elif k.startswith('features.'):
+                        mapped_key = k[9:]  # Remove 'features.' prefix
+                    
+                    # Check if the mapped key exists in the model
+                    if mapped_key in model_state_dict:
+                        filtered_state_dict[mapped_key] = v
+                    else:
+                        print(f"Warning: Could not map key {k} -> {mapped_key} to model state dict")
+                
+                # Load the filtered state dict
+                model.load_state_dict(filtered_state_dict, strict=False)
+                print("Successfully loaded RadImageNet weights!")
+                
+            else:
+                print(f"RadImageNet checkpoint not found at {radimagenet_path}")
+                print("Falling back to ImageNet ResNet-50")
+                model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
+                
+        except Exception as e:
+            print(f"Error loading RadImageNet weights: {e}")
+            print("Falling back to ImageNet ResNet-50")
+            model = models.resnet50(weights=ResNet50_Weights.IMAGENET1K_V1)
         
-        # Keep 3-channel input since training script converts to 3-channel
-        # No need to modify conv1 - it already expects 3 channels
+        # For RadImageNet, we can use single-channel input since it was trained on medical images
+        # But we'll keep 3-channel for now to match the current training pipeline
+        # If you want to use single-channel, uncomment the line below:
+        # model.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
         # Replace classifier with appropriate multi-task head
         feature_dim = model.fc.in_features
-        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type)
+        model.fc = ModelFactory._create_multitask_head(feature_dim, dropout, biomarker_config, head_type=head_type, single_target_strategy=single_target_strategy)
         
         if fine_tuning_strategy == "linear_probe":
             for param in model.parameters():

@@ -79,7 +79,7 @@ echo ""
 # Configuration
 PYTHON_PATH="/lfs/turing1/0/mahmedc/miniconda3/envs/mahmedc_env/bin/python"
 AVAILABLE_GPUS=(0 1 2 3 4 5 6 7 8 9)
-LEARNING_RATES=(1e-5 1e-4 1e-3 1e-2)
+LEARNING_RATES=(1e-5 1e-4 1e-3)
 
 # Function to launch experiments for a single model
 launch_model_experiments() {
@@ -91,10 +91,10 @@ launch_model_experiments() {
     # Base command template
     BASE_CMD="$PYTHON_PATH run_experiments.py \
         --config_csv experimentation_plan_simplified.csv \
-        --biomarker_config config/biomarker_config_mlhc.yaml \
+        --biomarker_config config/biomarker_config_mortality.yaml \
         --data_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data \
         --model_name \"$model_name\" \
-        --output_base_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/models/mlhc_targets/grad_norm/linear_probe/regularized \
+        --output_base_dir /lfs/turing1/0/mahmedc/Comorbidities-Detection/models/mortality_only \
         --resume \
         --no_confirm \
         --epochs 100"
@@ -113,10 +113,10 @@ launch_model_experiments() {
         # Create safe session name (replace spaces and special chars with underscores)
         SAFE_MODEL_NAME=$(echo "$model_name" | sed 's/[^a-zA-Z0-9_-]/_/g')
         if [ "$USE_GRADNORM" = true ]; then
-            SESSION_NAME="${SAFE_MODEL_NAME}_mlhc_targets_linear_probe_regularized_gradnorm_lr_${LR}_gpu_${GPU}"
+            SESSION_NAME="${SAFE_MODEL_NAME}_mortality_gradnorm_lr_${LR}_gpu_${GPU}"
             echo "  📋 GPU $GPU: Model $model_name, Learning rate $LR, GradNorm ON (tmux: $SESSION_NAME)"
         else
-            SESSION_NAME="${SAFE_MODEL_NAME}_mlhc_targets_linear_probe_regularized_lr_${LR}_gpu_${GPU}"
+            SESSION_NAME="${SAFE_MODEL_NAME}_mortality_lr_${LR}_gpu_${GPU}"
             echo "  📋 GPU $GPU: Model $model_name, Learning rate $LR (tmux: $SESSION_NAME)"
         fi
         
@@ -128,9 +128,9 @@ launch_model_experiments() {
         tmux send-keys -t "$SESSION_NAME" "export HF_HOME=/lfs/turing1/0/mahmedc/.cache/huggingface" Enter
         tmux send-keys -t "$SESSION_NAME" "export HF_HUB_CACHE=/lfs/turing1/0/mahmedc/.cache/huggingface/hub" Enter
         if [ "$USE_GRADNORM" = true ]; then
-            tmux send-keys -t "$SESSION_NAME" "echo \"🚀 Starting $model_name MLHC Targets Linear Probe Regularized with GradNorm - LR: $LR, GPU: $GPU, Alpha: $GRADNORM_ALPHA, Update Freq: $GRADNORM_UPDATE_FREQ\"" Enter
+            tmux send-keys -t "$SESSION_NAME" "echo \"🚀 Starting $model_name Mortality with GradNorm - LR: $LR, GPU: $GPU, Alpha: $GRADNORM_ALPHA, Update Freq: $GRADNORM_UPDATE_FREQ\"" Enter
         else
-            tmux send-keys -t "$SESSION_NAME" "echo \"🚀 Starting $model_name MLHC Targets Linear Probe Regularized - LR: $LR, GPU: $GPU\"" Enter
+            tmux send-keys -t "$SESSION_NAME" "echo \"🚀 Starting $model_name Mortality - LR: $LR, GPU: $GPU\"" Enter
         fi
         tmux send-keys -t "$SESSION_NAME" "$BASE_CMD --learning_rate $LR" Enter
         
@@ -167,9 +167,9 @@ echo "✅ All experiments launched!"
 echo ""
 echo "📋 Monitor experiments:"
 if [ "$USE_GRADNORM" = true ]; then
-    echo "  tmux list-sessions | grep mlhc_targets_linear_probe_regularized_gradnorm"
+    echo "  tmux list-sessions | grep mortality_gradnorm"
 else
-    echo "  tmux list-sessions | grep mlhc_targets_linear_probe_regularized"
+    echo "  tmux list-sessions | grep mortality"
 fi
 echo ""
 echo "🔍 Attach to specific experiment:"
@@ -185,10 +185,10 @@ for model_idx in "${!MODEL_NAMES[@]}"; do
         if [ $GPU_IDX -lt ${#AVAILABLE_GPUS[@]} ]; then
             GPU="${AVAILABLE_GPUS[$GPU_IDX]}"
             if [ "$USE_GRADNORM" = true ]; then
-                SESSION_NAME="${SAFE_MODEL_NAME}_mlhc_targets_linear_probe_regularized_gradnorm_lr_${LR}_gpu_${GPU}"
+                SESSION_NAME="${SAFE_MODEL_NAME}_mortality_gradnorm_lr_${LR}_gpu_${GPU}"
                 echo "    tmux attach -t $SESSION_NAME  # LR: $LR, GPU: $GPU, GradNorm ON"
             else
-                SESSION_NAME="${SAFE_MODEL_NAME}_mlhc_targets_linear_probe_regularized_lr_${LR}_gpu_${GPU}"
+                SESSION_NAME="${SAFE_MODEL_NAME}_mortality_lr_${LR}_gpu_${GPU}"
                 echo "    tmux attach -t $SESSION_NAME  # LR: $LR, GPU: $GPU"
             fi
         fi
@@ -198,11 +198,11 @@ done
 echo "📊 Check GPU usage:"
 echo "  watch -n 5 nvidia-smi"
 echo ""
-echo "📁 Results will be saved in: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models/mlhc_targets/grad_norm/linear_probe/regularized"
+echo "📁 Results will be saved in: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models/mortality_only"
 echo ""
 echo "🛑 To stop all experiments:"
 if [ "$USE_GRADNORM" = true ]; then
-    echo "  tmux list-sessions | grep mlhc_targets_linear_probe_regularized_gradnorm | cut -d: -f1 | xargs -I {} tmux kill-session -t {}"   
+    echo "  tmux list-sessions | grep mortality_gradnorm | cut -d: -f1 | xargs -I {} tmux kill-session -t {}"   
 else
-    echo "  tmux list-sessions | grep mlhc_targets_linear_probe_regularized | cut -d: -f1 | xargs -I {} tmux kill-session -t {}"
+    echo "  tmux list-sessions | grep mortality | cut -d: -f1 | xargs -I {} tmux kill-session -t {}"
 fi

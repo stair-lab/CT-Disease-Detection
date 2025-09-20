@@ -7,54 +7,99 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Union, Optional
 from config.biomarker_config import FlexibleBiomarkerConfig, TensorLayout
+from .single_target_strategies import (
+    SingleTargetStrategy, 
+    FeatureExtractor, 
+    create_feature_extractor,
+    get_strategy_from_csv
+)
 
 
 class FlexibleMultiTaskHead(nn.Module):
     """Flexible multi-task head that adapts to biomarker configuration"""
     
-    def __init__(self, input_dim: int, biomarker_config: FlexibleBiomarkerConfig, dropout: float = 0.1):
+    def __init__(
+        self, 
+        input_dim: int, 
+        biomarker_config: FlexibleBiomarkerConfig, 
+        dropout: float = 0.1,
+        single_target_strategy: Optional[Union[str, SingleTargetStrategy]] = None
+    ):
         super().__init__()
         
         self.biomarker_config = biomarker_config
         self.tensor_layout = biomarker_config.get_tensor_layout()
         
-        # Shared feature processing
-        self.shared_layers = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.BatchNorm1d(512)
-        )
+        # Handle single-target strategy
+        self.single_target_strategy = None
+        self.feature_extractor = None
+        
+        if single_target_strategy is not None:
+            if isinstance(single_target_strategy, str):
+                self.single_target_strategy = get_strategy_from_csv(single_target_strategy)
+            else:
+                self.single_target_strategy = single_target_strategy
+            
+            # Create appropriate feature extractor
+            self.feature_extractor = create_feature_extractor(
+                self.single_target_strategy, 
+                input_dim, 
+                feature_dim=512, 
+                dropout=dropout
+            )
+            
+            # Use feature extractor output dimension
+            processed_input_dim = self.feature_extractor.output_dim
+        else:
+            # Default behavior - use original input dimension
+            processed_input_dim = input_dim
+        
+        # Shared feature processing (only if no single-target strategy is used)
+        if self.single_target_strategy is None:
+            self.shared_layers = nn.Sequential(
+                nn.Linear(input_dim, 512),
+                nn.ReLU(inplace=True),
+                nn.Dropout(dropout),
+                nn.BatchNorm1d(512)
+            )
+        else:
+            # Skip shared layers when using single-target strategy
+            self.shared_layers = nn.Identity()
+            processed_input_dim = self.feature_extractor.output_dim
         
         # Task-specific heads
         self.task_heads = nn.ModuleDict()
         
         # Binary classification heads (one per biomarker)
         for biomarker in biomarker_config.binary_biomarkers:
-            self.task_heads[f"binary_{biomarker.name}"] = nn.Linear(512, 1)
+            self.task_heads[f"binary_{biomarker.name}"] = nn.Linear(processed_input_dim, 1)
         
         # Multiclass classification heads
         for biomarker in biomarker_config.multiclass_biomarkers:
             num_classes = len(biomarker.classes)
-            self.task_heads[f"multiclass_{biomarker.name}"] = nn.Linear(512, num_classes)
+            self.task_heads[f"multiclass_{biomarker.name}"] = nn.Linear(processed_input_dim, num_classes)
         
         # Regression heads (one per biomarker)
         for biomarker in biomarker_config.continuous_biomarkers:
-            self.task_heads[f"continuous_{biomarker.name}"] = nn.Linear(512, 1)
+            self.task_heads[f"continuous_{biomarker.name}"] = nn.Linear(processed_input_dim, 1)
     
     def forward(self, x):
         """
         Forward pass
         
         Args:
-            x: Input features [batch_size, input_dim]
+            x: Input features [batch_size, input_dim] or [batch_size, C, H, W] for spatial features
             
         Returns:
             Concatenated outputs [batch_size, total_output_size]
         """
-        shared_features = self.shared_layers(x)
+        # Apply single-target strategy feature extraction if specified
+        if self.single_target_strategy is not None and self.feature_extractor is not None:
+            shared_features = self.feature_extractor(x)
+        else:
+            shared_features = self.shared_layers(x)
         
         outputs = []
         
@@ -86,11 +131,41 @@ class LinearProbeMultiTaskHead(nn.Module):
     No shared layers, minimal parameters, maximum interpretability
     """
     
-    def __init__(self, input_dim: int, biomarker_config: FlexibleBiomarkerConfig, dropout: float = 0.0):
+    def __init__(
+        self, 
+        input_dim: int, 
+        biomarker_config: FlexibleBiomarkerConfig, 
+        dropout: float = 0.0,
+        single_target_strategy: Optional[Union[str, SingleTargetStrategy]] = None
+    ):
         super().__init__()
         
         self.biomarker_config = biomarker_config
         self.tensor_layout = biomarker_config.get_tensor_layout()
+        
+        # Handle single-target strategy
+        self.single_target_strategy = None
+        self.feature_extractor = None
+        
+        if single_target_strategy is not None:
+            if isinstance(single_target_strategy, str):
+                self.single_target_strategy = get_strategy_from_csv(single_target_strategy)
+            else:
+                self.single_target_strategy = single_target_strategy
+            
+            # Create appropriate feature extractor
+            self.feature_extractor = create_feature_extractor(
+                self.single_target_strategy, 
+                input_dim, 
+                feature_dim=input_dim,  # Keep same dimension for linear probe
+                dropout=0.0  # No dropout for linear probe
+            )
+            
+            # Use feature extractor output dimension
+            processed_input_dim = self.feature_extractor.output_dim
+        else:
+            # Default behavior - use original input dimension
+            processed_input_dim = input_dim
         
         # Optional minimal dropout (usually 0.0 for true linear probe)
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
@@ -100,16 +175,16 @@ class LinearProbeMultiTaskHead(nn.Module):
         
         # Binary classification heads - direct from backbone
         for biomarker in biomarker_config.binary_biomarkers:
-            self.task_heads[f"binary_{biomarker.name}"] = nn.Linear(input_dim, 1)
+            self.task_heads[f"binary_{biomarker.name}"] = nn.Linear(processed_input_dim, 1)
         
         # Multiclass classification heads - direct from backbone  
         for biomarker in biomarker_config.multiclass_biomarkers:
             num_classes = len(biomarker.classes)
-            self.task_heads[f"multiclass_{biomarker.name}"] = nn.Linear(input_dim, num_classes)
+            self.task_heads[f"multiclass_{biomarker.name}"] = nn.Linear(processed_input_dim, num_classes)
         
         # Regression heads - direct from backbone
         for biomarker in biomarker_config.continuous_biomarkers:
-            self.task_heads[f"continuous_{biomarker.name}"] = nn.Linear(input_dim, 1)
+            self.task_heads[f"continuous_{biomarker.name}"] = nn.Linear(processed_input_dim, 1)
         
         # Initialize weights for better convergence
         self._initialize_weights()
@@ -127,13 +202,17 @@ class LinearProbeMultiTaskHead(nn.Module):
         Direct forward pass - no shared processing
         
         Args:
-            x: Backbone features [batch_size, input_dim] (e.g., [B, 512] from ResNet-34)
+            x: Backbone features [batch_size, input_dim] or [batch_size, C, H, W] for spatial features
             
         Returns:
             Concatenated outputs [batch_size, total_output_size]
         """
-        # Optional dropout on backbone features (usually disabled)
-        features = self.dropout(x)  # [batch_size, input_dim]
+        # Apply single-target strategy feature extraction if specified
+        if self.single_target_strategy is not None and self.feature_extractor is not None:
+            features = self.feature_extractor(x)
+        else:
+            # Optional dropout on backbone features (usually disabled)
+            features = self.dropout(x)  # [batch_size, input_dim]
         
         outputs = []
         

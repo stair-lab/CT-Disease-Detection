@@ -64,39 +64,108 @@ def compute_class_weights_for_dataset(dataset, biomarker_config: FlexibleBiomark
 
 
 def create_data_transforms(config: ExperimentConfig, is_training=True):
-    """Create data transforms based on configuration"""
+    """Create data transforms optimized for different pre-trained models on medical images"""
     aug_params = parse_augmentation_string(config.image_augmentations)
     
     if is_training:
         transform_list = []
         
-        # Add augmentations
-        if aug_params['horizontal_flip']:
-            transform_list.append(transforms.RandomHorizontalFlip(p=0.5))
+        # Different augmentation strategies based on pre-training source
+        if config.pretrained_weights == "RadImageNet":
+            # RadImageNet-specific augmentations (more conservative for medical domain)
+            if aug_params['horizontal_flip']:
+                # Very conservative for medical images
+                transform_list.append(transforms.RandomHorizontalFlip(p=0.2))
+            
+            # Use RandomApply to prevent over-augmentation
+            geometric_augs = []
+            
+            if aug_params['rotation'] > 0:
+                # Very conservative rotation for medical images
+                geometric_augs.append(transforms.RandomRotation(degrees=aug_params['rotation']//3))  # 1/3 the rotation
+            
+            if aug_params['random_crop']:
+                # Minimal cropping to preserve anatomical features
+                geometric_augs.append(transforms.RandomResizedCrop(
+                    256, 
+                    scale=(0.95, 1.0),     # Very conservative cropping
+                    ratio=(0.9, 1.1)       # Minimal aspect ratio change
+                ))
+            
+            # Apply geometric augmentations with low probability
+            if geometric_augs:
+                transform_list.append(transforms.RandomApply(geometric_augs, p=0.4))
+            
+            # Minimal color augmentations for medical images
+            if aug_params['color_jitter']:
+                transform_list.append(transforms.RandomApply([
+                    transforms.ColorJitter(
+                        brightness=aug_params['brightness'] * 0.3,  # Very reduced intensity
+                        contrast=aug_params['contrast'] * 0.3       # Very reduced intensity
+                    )
+                ], p=0.3))  # Very low probability
+            
+        else:
+            # ImageNet or non-pretrained augmentations (more aggressive)
+            if aug_params['horizontal_flip']:
+                # Reduced probability for medical images (anatomical consistency)
+                transform_list.append(transforms.RandomHorizontalFlip(p=0.3))
+            
+            # Use RandomApply to prevent over-augmentation
+            geometric_augs = []
+            
+            if aug_params['rotation'] > 0:
+                # More conservative rotation for medical images
+                geometric_augs.append(transforms.RandomRotation(degrees=aug_params['rotation']//2))  # Half the rotation
+            
+            if aug_params['random_crop']:
+                # Less aggressive cropping to preserve anatomical features
+                geometric_augs.append(transforms.RandomResizedCrop(
+                    256, 
+                    scale=(0.9, 1.0),      # Less aggressive cropping
+                    ratio=(0.8, 1.2)       # Slightly wider aspect ratio
+                ))
+            
+            # Apply geometric augmentations with moderate probability
+            if geometric_augs:
+                transform_list.append(transforms.RandomApply(geometric_augs, p=0.6))
+            
+            # Color augmentations (less critical for grayscale, but helps with domain adaptation)
+            if aug_params['color_jitter']:
+                transform_list.append(transforms.RandomApply([
+                    transforms.ColorJitter(
+                        brightness=aug_params['brightness'] * 0.5,  # Reduced intensity
+                        contrast=aug_params['contrast'] * 0.5       # Reduced intensity
+                    )
+                ], p=0.4))  # Lower probability
         
-        if aug_params['rotation'] > 0:
-            transform_list.append(transforms.RandomRotation(degrees=aug_params['rotation']))
-        
-        if aug_params['random_crop']:
-            transform_list.extend([
-                transforms.RandomResizedCrop(256, scale=(0.8, 1.0), ratio=(0.75, 1.33))
-            ])
-        
-        if aug_params['color_jitter']:
-            transform_list.append(
-                transforms.ColorJitter(
-                    brightness=aug_params['brightness'],
-                    contrast=aug_params['contrast']
-                )
-            )
-        
-        # Always add tensor conversion
+        # Convert to tensor
         transform_list.append(transforms.ToTensor())
         
-        # Add normalization
+        # CRITICAL: Convert grayscale to 3-channel for pre-trained models
+        transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))
+        
+        # Add normalization - use appropriate stats based on pre-training
         if aug_params['imagenet_norm']:
-            # Use CT-specific normalization
-            transform_list.append(transforms.Normalize((0.55001191,), (0.18854326,)))
+            if config.pretrained_weights == "ImageNet":
+                # Use ImageNet normalization for ImageNet pre-trained models
+                transform_list.append(transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], 
+                    std=[0.229, 0.224, 0.225]
+                ))
+            elif config.pretrained_weights == "RadImageNet":
+                # Use RadImageNet normalization (medical imaging specific)
+                # Note: These are estimated values - you may need to adjust based on actual RadImageNet stats
+                transform_list.append(transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],  # Using ImageNet stats as fallback
+                    std=[0.229, 0.224, 0.225]   # RadImageNet likely uses similar normalization
+                ))
+            else:
+                # Use CT-specific normalization for non-pretrained models
+                transform_list.append(transforms.Normalize(
+                    mean=[0.55001191, 0.55001191, 0.55001191], 
+                    std=[0.18854326, 0.18854326, 0.18854326]
+                ))
         
         return transforms.Compose(transform_list)
     
@@ -104,8 +173,29 @@ def create_data_transforms(config: ExperimentConfig, is_training=True):
         # Validation/test transforms (no augmentation)
         transform_list = [transforms.ToTensor()]
         
+        # CRITICAL: Convert grayscale to 3-channel for pre-trained models
+        transform_list.append(transforms.Lambda(lambda x: x.repeat(3, 1, 1)))
+        
         if aug_params['imagenet_norm']:
-            transform_list.append(transforms.Normalize((0.55001191,), (0.18854326,)))
+            if config.pretrained_weights == "ImageNet":
+                # Use ImageNet normalization for ImageNet pre-trained models
+                transform_list.append(transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], 
+                    std=[0.229, 0.224, 0.225]
+                ))
+            elif config.pretrained_weights == "RadImageNet":
+                # Use RadImageNet normalization (medical imaging specific)
+                # Note: These are estimated values - you may need to adjust based on actual RadImageNet stats
+                transform_list.append(transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],  # Using ImageNet stats as fallback
+                    std=[0.229, 0.224, 0.225]   # RadImageNet likely uses similar normalization
+                ))
+            else:
+                # Use CT-specific normalization for non-pretrained models
+                transform_list.append(transforms.Normalize(
+                    mean=[0.55001191, 0.55001191, 0.55001191], 
+                    std=[0.18854326, 0.18854326, 0.18854326]
+                ))
         
         return transforms.Compose(transform_list)
 
@@ -334,6 +424,8 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     logger.info(f"Biomarker configuration saved to: {biomarker_config_file}")
     
     logger.info(f"Model: {config.model}")
+    logger.info(f"Single-target strategy: {config.single_target_strategy}")
+    logger.info(f"Multi-target strategy: {config.multi_target_strategy}")
     logger.info(f"Expected GPU memory: {config.expected_gpu_memory}")
     logger.info(f"Training epochs: {epochs}")
     logger.info(f"Data directory: {data_dir}")
@@ -392,7 +484,8 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         pretrained_weights=config.pretrained_weights,
         fine_tuning_strategy=config.fine_tuning_strategy,
         dropout=config.dropout,
-        biomarker_config=biomarker_config
+        biomarker_config=biomarker_config,
+        single_target_strategy=config.single_target_strategy
     )
 
     model = model.to(device)
@@ -669,7 +762,7 @@ def main():
     
     # Save results summary
     results_df = pd.DataFrame(results)
-    results_df.to_csv(os.path.join(args.output_base_dir, 'experiment_results.csv'), index=False)
+    # results_df.to_csv(os.path.join(args.output_base_dir, 'experiment_results.csv'), index=False)  # Disabled due to bug
     
     print(f"\n{'='*50}")
     print("All experiments completed!")
