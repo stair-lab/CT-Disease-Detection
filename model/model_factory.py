@@ -500,6 +500,16 @@ class ModelFactory:
         # Determine head type based on fine-tuning strategy
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
+        # Set cache directory to avoid AFS permission issues
+        import os
+        os.environ['HF_HOME'] = '/lfs/turing1/0/mahmedc/.cache/huggingface'
+        os.environ['TRANSFORMERS_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/transformers'
+        os.environ['HF_HUB_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/hub'
+        
+        # Create cache directories if they don't exist
+        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/hub', exist_ok=True)
+        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/transformers', exist_ok=True)
+        
         # Use timm for DINOv2 models
         if "Small" in architecture:
             model_name = "vit_small_patch14_dinov2"

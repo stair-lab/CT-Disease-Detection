@@ -46,7 +46,7 @@ class FlexibleMultiTaskHead(nn.Module):
             self.feature_extractor = create_feature_extractor(
                 self.single_target_strategy, 
                 input_dim, 
-                feature_dim=512, 
+                feature_dim=input_dim,  # Use actual input dimension instead of hardcoded 512
                 dropout=dropout
             )
             
