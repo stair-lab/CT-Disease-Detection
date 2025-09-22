@@ -53,6 +53,21 @@ class ContinuousBiomarker:
         else:
             # Default to min_max
             return (value - self.min_value) / (self.max_value - self.min_value)
+    
+    def denormalize(self, normalized_value: float) -> float:
+        """Denormalize a normalized value back to original scale"""
+        if self.normalization == "min_max":
+            # Reverse min-max normalization from [0, 1] to original range
+            return normalized_value * (self.max_value - self.min_value) + self.min_value
+        elif self.normalization == "z_score":
+            # Reverse z-score normalization (would need mean and std, using min_max for now)
+            return normalized_value * (self.max_value - self.min_value) + self.min_value
+        elif self.normalization == "none":
+            # No normalization
+            return normalized_value
+        else:
+            # Default to min_max
+            return normalized_value * (self.max_value - self.min_value) + self.min_value
 
 
 @dataclass
