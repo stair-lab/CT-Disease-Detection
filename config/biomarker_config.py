@@ -434,7 +434,7 @@ def create_comorbidities_config() -> FlexibleBiomarkerConfig:
             name="AGE",
             description="Patient age in years",
             min_value=18,
-            max_value=102,
+            max_value=89,  # Updated for HIPAA compliance after filtering "90+" records
             normalization="min_max"
         )
     ]

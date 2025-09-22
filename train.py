@@ -531,11 +531,23 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     
     # Training loop
     best_median_auroc = 0.0
+    best_mae = float('inf')  # Initialize MAE tracking for continuous-only scenarios
     best_epoch = 0
     patience = 10
     patience_counter = 0
     
+    # Determine task types for logging and selection
+    has_classification_tasks = (len(biomarker_config.binary_biomarkers) > 0 or 
+                               len(biomarker_config.multiclass_biomarkers) > 0)
+    has_continuous_tasks = len(biomarker_config.continuous_biomarkers) > 0
+    
     logger.info(f"Starting training for {epochs} epochs with early stopping (patience: {patience})")
+    if has_classification_tasks and has_continuous_tasks:
+        logger.info("Multi-task training: Classification + Regression")
+    elif has_classification_tasks:
+        logger.info("Classification training: Using median AUROC for best model selection")
+    elif has_continuous_tasks:
+        logger.info("Regression training: Using MAE for best model selection")
     
     for epoch in range(epochs):
         epoch_start_time = time.time()
@@ -623,21 +635,73 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
                     training_logger.info(f"  {biomarker.name}: MSE={biomarker_metrics['mse']:.4f}, "
                                        f"MAE={biomarker_metrics.get('mae', 0.0):.4f}")
         
-        # Save checkpoint if best model (using median AUROC for selection)
-        is_best = val_metrics['median_auroc'] > best_median_auroc
-        if is_best:
-            best_median_auroc = val_metrics['median_auroc']
-            best_epoch = epoch + 1
-            patience_counter = 0  # Reset patience counter
-            training_logger.info(f"🎯 New best model! Median AUROC: {best_median_auroc:.4f} (Avg: {val_metrics['average_auroc']:.4f})")
-        else:
-            patience_counter += 1
-            training_logger.info(f"No improvement. Patience: {patience_counter}/{patience}")
+        # Save checkpoint if best model
+        # Use MAE for continuous-only scenarios, AUROC for classification scenarios
+        
+        if has_classification_tasks:
+            # Use median AUROC for classification scenarios
+            # Check if we actually have AUROC values (not just 0.0)
+            if val_metrics['median_auroc'] > 0.0:
+                is_best = val_metrics['median_auroc'] > best_median_auroc
+                if is_best:
+                    best_median_auroc = val_metrics['median_auroc']
+                    best_epoch = epoch + 1
+                    patience_counter = 0  # Reset patience counter
+                    training_logger.info(f"🎯 New best model! Median AUROC: {best_median_auroc:.4f} (Avg: {val_metrics['average_auroc']:.4f})")
+                else:
+                    patience_counter += 1
+                    training_logger.info(f"No improvement. Patience: {patience_counter}/{patience}")
+                    
+                    # Early stopping check
+                    if patience_counter >= patience:
+                        training_logger.info(f"⏹️ Early stopping triggered!")
+                        break
+            else:
+                # No actual AUROC values available - fall back to MAE if continuous tasks exist
+                if has_continuous_tasks:
+                    training_logger.warning("No AUROC values available for classification tasks, falling back to MAE for model selection")
+                    # Use MAE logic (will be handled in the elif block below)
+                    pass
+                else:
+                    # No meaningful metrics available
+                    is_best = False
+                    patience_counter += 1
+                    training_logger.warning("No AUROC values available and no continuous tasks - cannot determine best model")
+        elif has_continuous_tasks:
+            # Use MAE for continuous-only scenarios (lower MAE is better)
+            mae_values = []
+            for biomarker in biomarker_config.continuous_biomarkers:
+                if biomarker.name in val_metrics:
+                    mae = val_metrics[biomarker.name].get('mae', float('inf'))
+                    mae_values.append(mae)
+                    training_logger.info(f"  {biomarker.name}: MAE={mae:.4f}")
             
-            # Early stopping check
-            if patience_counter >= patience:
-                training_logger.info(f"⏹️ Early stopping triggered!")
-                break
+            if mae_values:
+                current_mae = np.mean(mae_values)
+                is_best = current_mae < best_mae
+                if is_best:
+                    best_mae = current_mae
+                    best_epoch = epoch + 1
+                    patience_counter = 0  # Reset patience counter
+                    training_logger.info(f"🎯 New best model! Average MAE: {best_mae:.4f}")
+                else:
+                    patience_counter += 1
+                    training_logger.info(f"No improvement. Current MAE: {current_mae:.4f}, Best MAE: {best_mae:.4f}. Patience: {patience_counter}/{patience}")
+                    
+                    # Early stopping check
+                    if patience_counter >= patience:
+                        training_logger.info(f"⏹️ Early stopping triggered!")
+                        break
+            else:
+                # Fallback if no MAE values available
+                is_best = False
+                patience_counter += 1
+                training_logger.warning("No MAE values available for continuous biomarkers")
+        else:
+            # No biomarkers configured - should not happen
+            is_best = False
+            training_logger.error("No biomarkers configured!")
+            break
         
         # Save checkpoint
         checkpoint = {
@@ -652,6 +716,7 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
             'config': config.to_dict(),
             'biomarker_config': biomarker_config.experiment_name,
             'best_median_auroc': best_median_auroc,
+            'best_mae': best_mae,
             'best_epoch': best_epoch
         }
         
@@ -660,12 +725,22 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         if is_best:
             torch.save(checkpoint, os.path.join(output_dir, 'best_checkpoint.pth'))
     
-    logger.info(f"Training completed! Best model at epoch {best_epoch} with Median AUROC: {best_median_auroc:.4f}")
-    
     # Close tensorboard writer
     writer.close()
     
-    return model, best_median_auroc
+    # Final logging based on task type and actual metrics used
+    if has_classification_tasks and best_median_auroc > 0.0:
+        # Classification tasks with actual AUROC values
+        logger.info(f"Training completed! Best model at epoch {best_epoch} with Median AUROC: {best_median_auroc:.4f}")
+        return model, best_median_auroc
+    elif has_continuous_tasks:
+        # Continuous tasks (either only continuous, or classification tasks fell back to MAE)
+        logger.info(f"Training completed! Best model at epoch {best_epoch} with MAE: {best_mae:.4f}")
+        return model, best_mae
+    else:
+        # No meaningful metrics available
+        logger.info(f"Training completed! Best model at epoch {best_epoch} (no meaningful metrics available)")
+        return model, 0.0
 
 
 def main():

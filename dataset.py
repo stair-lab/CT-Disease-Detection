@@ -33,6 +33,9 @@ class ClassifierDataset(Dataset):
         if 'RAF' not in self.df.columns:
             self.df['RAF'] = 0
         
+        # Apply age filtering for HIPAA compliance
+        self.df = self._filter_age_records()
+        
         self.transforms = transforms
         
         # Get tensor layout for efficient indexing
@@ -43,6 +46,57 @@ class ClassifierDataset(Dataset):
         
         print(f"Biomarkers configured: {self.biomarker_config.get_all_biomarker_names()}")
         print(f"Total output tensor size: {self.biomarker_config.total_output_size}")
+
+    def _filter_age_records(self):
+        """
+        Filter out records with AGE = "90+" for HIPAA compliance.
+        Also ensures that remaining records have max age of 89.
+        """
+        if 'AGE' not in self.df.columns:
+            print("⚠️  AGE column not found - skipping age filtering")
+            return self.df
+        
+        original_count = len(self.df)
+        
+        # Filter out "90+" records
+        age_90_plus_mask = self.df['AGE'] == '90+'
+        age_90_plus_count = age_90_plus_mask.sum()
+        
+        if age_90_plus_count > 0:
+            print(f"🔒 HIPAA Compliance: Filtering out {age_90_plus_count:,} records with AGE='90+'")
+            self.df = self.df[~age_90_plus_mask].copy()
+        
+        # Convert remaining AGE values to numeric and verify max age is 89
+        numeric_age_mask = pd.to_numeric(self.df['AGE'], errors='coerce').notna()
+        if not numeric_age_mask.all():
+            # Handle any non-numeric age values (shouldn't happen after filtering 90+)
+            non_numeric_count = (~numeric_age_mask).sum()
+            print(f"⚠️  Found {non_numeric_count} non-numeric AGE values, filtering them out")
+            self.df = self.df[numeric_age_mask].copy()
+        
+        # Convert to numeric and verify max age
+        self.df['AGE'] = pd.to_numeric(self.df['AGE'], errors='coerce')
+        
+        if len(self.df) > 0:
+            max_age = self.df['AGE'].max()
+            min_age = self.df['AGE'].min()
+            
+            if max_age > 89:
+                print(f"⚠️  Warning: Maximum age is {max_age}, expected <= 89")
+            else:
+                print(f"✅ Age range after filtering: {min_age:.0f} - {max_age:.0f} years")
+        
+        filtered_count = len(self.df)
+        removed_count = original_count - filtered_count
+        
+        if removed_count > 0:
+            print(f"📊 Dataset filtering summary:")
+            print(f"   Original records: {original_count:,}")
+            print(f"   Removed records: {removed_count:,}")
+            print(f"   Remaining records: {filtered_count:,}")
+            print(f"   Removal rate: {removed_count/original_count*100:.1f}%")
+        
+        return self.df
 
     def __len__(self):
         """
