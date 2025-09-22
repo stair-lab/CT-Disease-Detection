@@ -243,10 +243,10 @@ def main():
     # Configuration
     validation_results_csv = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/single_biomarker_val_results_20250921.csv"
     data_dir = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data"
-    output_base_dir = "val_results_best_models_verification"
-    results_csv = "single_biomarker_val_verification_results_20250922.csv"
+    output_base_dir = "test_results_best_models_nonvit"
+    results_csv = "single_biomarker_test_results_20250922_nonvit.csv"
     
-    print("🚀 Starting validation verification on best models (using val.csv)")
+    print("🚀 Starting validation verification on best models (using test.csv)")
     print("=" * 60)
     
     # Load best models
@@ -268,7 +268,7 @@ def main():
         print(f"\n[{i+1}/{len(best_models)}] Processing: {biomarker} - {architecture} - {learning_rate}")
         
         # Run test
-        result = run_test_on_model(model_name, biomarker, data_dir, output_base_dir, test_csv="val.csv")
+        result = run_test_on_model(model_name, biomarker, data_dir, output_base_dir, test_csv="test.csv")
         
         # Extract metrics
         metrics_row = extract_metrics_from_result(result, biomarker, architecture, learning_rate, model_name)
