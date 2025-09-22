@@ -717,7 +717,8 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
             'biomarker_config': biomarker_config.experiment_name,
             'best_median_auroc': best_median_auroc,
             'best_mae': best_mae,
-            'best_epoch': best_epoch
+            'best_epoch': best_epoch,
+            'optimal_thresholds': metrics_calc.optimal_thresholds  # Save optimal thresholds
         }
         
         # Save latest and best checkpoints
