@@ -21,11 +21,12 @@ class FlexibleMultiTaskHead(nn.Module):
     """Flexible multi-task head that adapts to biomarker configuration"""
     
     def __init__(
-        self, 
-        input_dim: int, 
-        biomarker_config: FlexibleBiomarkerConfig, 
+        self,
+        input_dim: int,
+        biomarker_config: FlexibleBiomarkerConfig,
         dropout: float = 0.1,
-        single_target_strategy: Optional[Union[str, SingleTargetStrategy]] = None
+        single_target_strategy: Optional[Union[str, SingleTargetStrategy]] = None,
+        target_feature_dim: Optional[int] = None
     ):
         super().__init__()
         
@@ -35,21 +36,23 @@ class FlexibleMultiTaskHead(nn.Module):
         # Handle single-target strategy
         self.single_target_strategy = None
         self.feature_extractor = None
-        
+        self.target_feature_dim = target_feature_dim
+
         if single_target_strategy is not None:
             if isinstance(single_target_strategy, str):
                 self.single_target_strategy = get_strategy_from_csv(single_target_strategy)
             else:
                 self.single_target_strategy = single_target_strategy
-            
-            # Create appropriate feature extractor
+
+            # Create appropriate feature extractor with target feature dimension
+            feature_dim = target_feature_dim if target_feature_dim is not None else input_dim
             self.feature_extractor = create_feature_extractor(
-                self.single_target_strategy, 
-                input_dim, 
-                feature_dim=input_dim,  # Use actual input dimension instead of hardcoded 512
+                self.single_target_strategy,
+                input_dim,
+                feature_dim=feature_dim,
                 dropout=dropout
             )
-            
+
             # Use feature extractor output dimension
             processed_input_dim = self.feature_extractor.output_dim
         else:
@@ -58,12 +61,15 @@ class FlexibleMultiTaskHead(nn.Module):
         
         # Shared feature processing (only if no single-target strategy is used)
         if self.single_target_strategy is None:
+            # Use target_feature_dim if provided, otherwise use 512 as default
+            output_dim = target_feature_dim if target_feature_dim is not None else 512
             self.shared_layers = nn.Sequential(
-                nn.Linear(input_dim, 512),
+                nn.Linear(input_dim, output_dim),
                 nn.ReLU(inplace=True),
                 nn.Dropout(dropout),
-                nn.BatchNorm1d(512)
+                nn.BatchNorm1d(output_dim)
             )
+            processed_input_dim = output_dim
         else:
             # Skip shared layers when using single-target strategy
             self.shared_layers = nn.Identity()
@@ -132,11 +138,12 @@ class LinearProbeMultiTaskHead(nn.Module):
     """
     
     def __init__(
-        self, 
-        input_dim: int, 
-        biomarker_config: FlexibleBiomarkerConfig, 
+        self,
+        input_dim: int,
+        biomarker_config: FlexibleBiomarkerConfig,
         dropout: float = 0.0,
-        single_target_strategy: Optional[Union[str, SingleTargetStrategy]] = None
+        single_target_strategy: Optional[Union[str, SingleTargetStrategy]] = None,
+        target_feature_dim: Optional[int] = None
     ):
         super().__init__()
         
@@ -146,21 +153,23 @@ class LinearProbeMultiTaskHead(nn.Module):
         # Handle single-target strategy
         self.single_target_strategy = None
         self.feature_extractor = None
-        
+        self.target_feature_dim = target_feature_dim
+
         if single_target_strategy is not None:
             if isinstance(single_target_strategy, str):
                 self.single_target_strategy = get_strategy_from_csv(single_target_strategy)
             else:
                 self.single_target_strategy = single_target_strategy
-            
-            # Create appropriate feature extractor
+
+            # Create appropriate feature extractor with target feature dimension
+            feature_dim = target_feature_dim if target_feature_dim is not None else input_dim
             self.feature_extractor = create_feature_extractor(
-                self.single_target_strategy, 
-                input_dim, 
-                feature_dim=input_dim,  # Keep same dimension for linear probe
+                self.single_target_strategy,
+                input_dim,
+                feature_dim=feature_dim,
                 dropout=0.0  # No dropout for linear probe
             )
-            
+
             # Use feature extractor output dimension
             processed_input_dim = self.feature_extractor.output_dim
         else:

@@ -356,6 +356,17 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     if single_target_strategy:
         print(f"Single-target strategy: {single_target_strategy}")
     
+    # Infer expected head input dim from checkpoint task head weights (if present)
+    expected_head_dim = None
+    try:
+        for k in state_dict_keys:
+            if ('.task_heads.' in k) and k.endswith('.weight'):
+                expected_head_dim = checkpoint['model_state_dict'][k].shape[1]
+                print(f"   Inferred expected head input dim from '{k}': {expected_head_dim}")
+                break
+    except Exception as _e:
+        print(f"   ⚠️  Could not infer expected head dim: {_e}")
+
     # Create model using ModelFactory
     model = ModelFactory.create_model(
         architecture=config.model,
@@ -364,7 +375,9 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         fine_tuning_strategy=config.fine_tuning_strategy,
         dropout=config.dropout,
         biomarker_config=biomarker_config,
-        single_target_strategy=single_target_strategy  # Use the extracted strategy
+        single_target_strategy=single_target_strategy,  # Use the extracted strategy
+        # Pass through inferred target feature dim for head alignment
+        single_target_output_dim=expected_head_dim
     )
     
     # Handle dynamic layer creation for DirectClassificationHeadExtractor
@@ -376,6 +389,64 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     has_classifier = hasattr(model, 'classifier') if 'model' in locals() else False
 
     print(f"   Debug: model has fc={has_fc}, classifier={has_classifier}")
+
+    # If single-target strategy is direct head, align feature extractor output dim to checkpoint head dim
+    try:
+        # Find any task head weight in checkpoint to infer expected feature dim
+        head_weight_key = None
+        for k in state_dict_keys:
+            if k.endswith('.task_heads.binary_MORTALITY.weight') or ('.task_heads.binary_' in k and k.endswith('.weight')) or \
+               ('.task_heads.continuous_' in k and k.endswith('.weight')) or \
+               ('.task_heads.multiclass_' in k and k.endswith('.weight')):
+                head_weight_key = k
+                break
+        if head_weight_key is not None:
+            expected_head_in = checkpoint['model_state_dict'][head_weight_key].shape[1]
+            # Determine current base dim from backbone
+            if has_fc and hasattr(model.fc, 'in_features'):
+                base_dim = model.fc.in_features
+                target_extractor_parent = model.fc
+                extractor_prefix = 'fc'
+            elif has_classifier and hasattr(model.classifier, 'in_features'):
+                base_dim = model.classifier.in_features
+                target_extractor_parent = model.classifier
+                extractor_prefix = 'classifier'
+            else:
+                base_dim = None
+                target_extractor_parent = None
+                extractor_prefix = ''
+
+            if base_dim is not None and target_extractor_parent is not None:
+                print(f"   Head alignment: base_dim={base_dim}, expected_head_in={expected_head_in}")
+                # If expected input dim for head differs from current processed dim, (re)create feature_extractor
+                # Always (re)create to ensure structures exist for key loading
+                import torch.nn as nn
+                if not hasattr(target_extractor_parent, 'feature_extractor'):
+                    # Create a minimal container with feature_extractor attribute
+                    # but our head class already includes it; just proceed to set it
+                    pass
+                target_extractor_parent.feature_extractor = nn.Module()
+                # Feature processor: Linear(base_dim -> expected_head_in) + ReLU + Dropout + BatchNorm
+                target_extractor_parent.feature_extractor.feature_processor = nn.Sequential(
+                    nn.Linear(base_dim, expected_head_in),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(0.1),
+                    nn.BatchNorm1d(expected_head_in)
+                ).to(device)
+                print(f"   Created feature_processor mapping {base_dim} -> {expected_head_in}")
+                # Optional flattened processor for safety (used if flattened path is triggered)
+                target_extractor_parent.feature_extractor.flattened_processor = nn.Sequential(
+                    nn.Linear(expected_head_in, expected_head_in),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(0.1),
+                    nn.LayerNorm(expected_head_in)
+                ).to(device)
+                print(f"   Ensured flattened_processor exists with output {expected_head_in}")
+                # Also ensure task head module exists and matches names (no structural change here)
+        else:
+            print("   No task head weight key found to infer expected head dim")
+    except Exception as _e:
+        print(f"   ⚠️  Head alignment step skipped due to error: {_e}")
 
     if has_feature_processor and has_flattened_processor and (has_fc or has_classifier):
         print("🔧 Pre-creating both feature_processor and flattened_processor to match saved state dict...")
