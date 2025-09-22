@@ -18,6 +18,7 @@ def load_best_models(csv_path: str) -> pd.DataFrame:
     """Load and filter to rank=1 models"""
     df = pd.read_csv(csv_path)
     best_models = df[df['rank'] == 1].copy()
+    best_models = best_models[best_models['architecture'] == 'ViT-Small']
     print(f"Found {len(best_models)} best models to test")
     return best_models
 
@@ -243,8 +244,8 @@ def main():
     # Configuration
     validation_results_csv = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/single_biomarker_val_results_20250921.csv"
     data_dir = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data"
-    output_base_dir = "test_results_best_models_nonvit"
-    results_csv = "single_biomarker_test_results_20250922_nonvit.csv"
+    output_base_dir = "test_results_best_models_vit"
+    results_csv = "single_biomarker_test_results_20250922_vit.csv"
     
     print("🚀 Starting validation verification on best models (using test.csv)")
     print("=" * 60)

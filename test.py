@@ -320,6 +320,10 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     has_nested_resnet = any('resnet34.fc' in key for key in state_dict_keys)  # Custom ResNet34
     has_nested_resnet18 = any('resnet18.fc' in key for key in state_dict_keys)  # Custom ResNet18
     has_nested_resnet50 = any('resnet50.fc' in key for key in state_dict_keys)  # Custom ResNet50
+    # Detect ViT checkpoints (timm DINOv2)
+    is_vit = any(any(tok in k for tok in ['cls_token', 'pos_embed', 'patch_embed', 'blocks']) for k in state_dict_keys) or \
+             ('vit' in config.model.lower() or 'dino' in config.model.lower())
+    print(f"   ViT detection: {is_vit}")
 
     # Debug: Print detection results
     print(f"   Detection results: feature_extractor={has_feature_extractor}, flattened_processor={has_flattened_processor}, feature_processor={has_feature_processor}")
@@ -349,7 +353,10 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     if detected_strategy and single_target_strategy != detected_strategy:
         print(f"⚠️  Auto-detected strategy mismatch: config says '{single_target_strategy}' but state_dict suggests '{detected_strategy}'")
         print(f"   State dict keys suggest: feature_extractor={has_feature_extractor}, flattened_processor={has_flattened_processor}, feature_processor={has_feature_processor}, nested_resnet34={has_nested_resnet}, nested_resnet18={has_nested_resnet18}, nested_resnet50={has_nested_resnet50}")
-        single_target_strategy = detected_strategy
+        if not is_vit:
+            single_target_strategy = detected_strategy
+        else:
+            print("   ⏭️  Keeping ViT single-target strategy from checkpoint (do not override)")
     
     print(f"Creating model: {config.model}")
     print(f"Fine-tuning strategy: {config.fine_tuning_strategy}")
@@ -377,7 +384,7 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         biomarker_config=biomarker_config,
         single_target_strategy=single_target_strategy,  # Use the extracted strategy
         # Pass through inferred target feature dim for head alignment
-        single_target_output_dim=expected_head_dim
+        single_target_output_dim=(None if is_vit else expected_head_dim)
     )
     
     # Handle dynamic layer creation for DirectClassificationHeadExtractor
@@ -391,7 +398,10 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     print(f"   Debug: model has fc={has_fc}, classifier={has_classifier}")
 
     # If single-target strategy is direct head, align feature extractor output dim to checkpoint head dim
+    # For ViT models, skip this alignment to preserve the exact training-time head wiring
     try:
+        if is_vit:
+            raise Exception("Skip head alignment for ViT")
         # Find any task head weight in checkpoint to infer expected feature dim
         head_weight_key = None
         for k in state_dict_keys:
@@ -411,6 +421,11 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
                 base_dim = model.classifier.in_features
                 target_extractor_parent = model.classifier
                 extractor_prefix = 'classifier'
+            elif hasattr(model, 'head') and hasattr(model, 'num_features'):
+                # ViT-style models: use model.head and model.num_features
+                base_dim = model.num_features
+                target_extractor_parent = model.head
+                extractor_prefix = 'head'
             else:
                 base_dim = None
                 target_extractor_parent = None
@@ -418,37 +433,41 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
 
             if base_dim is not None and target_extractor_parent is not None:
                 print(f"   Head alignment: base_dim={base_dim}, expected_head_in={expected_head_in}")
-                # If expected input dim for head differs from current processed dim, (re)create feature_extractor
-                # Always (re)create to ensure structures exist for key loading
+                # Create or reuse a proper FeatureExtractor, not a bare nn.Module
                 import torch.nn as nn
-                if not hasattr(target_extractor_parent, 'feature_extractor'):
-                    # Create a minimal container with feature_extractor attribute
-                    # but our head class already includes it; just proceed to set it
-                    pass
-                target_extractor_parent.feature_extractor = nn.Module()
-                # Feature processor: Linear(base_dim -> expected_head_in) + ReLU + Dropout + BatchNorm
+                from model.single_target_strategies import (
+                    DirectClassificationHeadExtractor,
+                    CLSTokenClassificationExtractor
+                )
+                # Prefer CLS extractor for ViT-style models; otherwise direct head
+                if hasattr(model, 'num_features') and hasattr(model, 'forward_head'):
+                    extractor = CLSTokenClassificationExtractor(feature_dim=expected_head_in, dropout=0.1)
+                else:
+                    extractor = DirectClassificationHeadExtractor(input_dim=base_dim, feature_dim=expected_head_in, dropout=0.1)
+                extractor = extractor.to(device)
+                target_extractor_parent.feature_extractor = extractor
+                # Ensure both processors exist and match dims for state_dict loading
                 target_extractor_parent.feature_extractor.feature_processor = nn.Sequential(
-                    nn.Linear(base_dim, expected_head_in),
+                    nn.Linear(base_dim if hasattr(model, 'forward_head') is False else expected_head_in, expected_head_in),
                     nn.ReLU(inplace=True),
                     nn.Dropout(0.1),
                     nn.BatchNorm1d(expected_head_in)
                 ).to(device)
-                print(f"   Created feature_processor mapping {base_dim} -> {expected_head_in}")
-                # Optional flattened processor for safety (used if flattened path is triggered)
                 target_extractor_parent.feature_extractor.flattened_processor = nn.Sequential(
                     nn.Linear(expected_head_in, expected_head_in),
                     nn.ReLU(inplace=True),
                     nn.Dropout(0.1),
                     nn.LayerNorm(expected_head_in)
                 ).to(device)
-                print(f"   Ensured flattened_processor exists with output {expected_head_in}")
+                print(f"   Ensured feature_extractor with processors is created for expected dim {expected_head_in}")
                 # Also ensure task head module exists and matches names (no structural change here)
         else:
             print("   No task head weight key found to infer expected head dim")
     except Exception as _e:
         print(f"   ⚠️  Head alignment step skipped due to error: {_e}")
 
-    if has_feature_processor and has_flattened_processor and (has_fc or has_classifier):
+    # Pre-create processors and remap keys for non-ViT models only
+    if (not is_vit) and has_feature_processor and has_flattened_processor and (has_fc or has_classifier or hasattr(model, 'head')):
         print("🔧 Pre-creating both feature_processor and flattened_processor to match saved state dict...")
         print("   ✅ Dual processor creation logic triggered!")
 
@@ -512,8 +531,12 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
             # Determine the correct prefix based on model structure
             if has_fc:
                 extractor_prefix = "fc.feature_extractor"
-            else:
+            elif has_classifier:
                 extractor_prefix = "classifier.feature_extractor"
+            elif hasattr(model, 'head'):
+                extractor_prefix = "head.feature_extractor"
+            else:
+                extractor_prefix = "feature_extractor"
 
             # Map feature_processor keys
             for old_key, value in state_dict.items():
@@ -599,6 +622,28 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         raise e
     model.to(device)
     model.eval()
+    # ViT head wiring debug
+    try:
+        is_vit = hasattr(model, 'num_features') and hasattr(model, 'head')
+        if is_vit:
+            print("🔍 ViT load debug:")
+            print(f"   num_features={getattr(model, 'num_features', None)}")
+            fx = getattr(model.head, 'feature_extractor', None)
+            print(f"   head.feature_extractor exists={fx is not None}")
+            if fx is not None:
+                fp = getattr(fx, 'feature_processor', None)
+                flp = getattr(fx, 'flattened_processor', None)
+                if isinstance(fp, torch.nn.Sequential) and len(fp) > 0 and hasattr(fp[0], 'in_features'):
+                    print(f"   feature_processor: {fp[0].in_features}->{fp[0].out_features}")
+                if isinstance(flp, torch.nn.Sequential) and len(flp) > 0 and hasattr(flp[0], 'in_features'):
+                    print(f"   flattened_processor: {flp[0].in_features}->{flp[0].out_features}")
+            # Show a task head weight shape from checkpoint for alignment reference
+            head_key = next((k for k in state_dict_keys if '.task_heads.' in k and k.endswith('.weight')), None)
+            if head_key:
+                shp = tuple(checkpoint['model_state_dict'][head_key].shape)
+                print(f"   checkpoint task head weight shape: {shp}")
+    except Exception as _e:
+        print(f"⚠️  ViT debug skipped: {_e}")
     
     # Log model info
     total_params = sum(p.numel() for p in model.parameters())
