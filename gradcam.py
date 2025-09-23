@@ -218,7 +218,7 @@ class GradCAMVisualizer:
         Returns:
             Matplotlib figure
         """
-        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
         
         # Set font to Times New Roman with better fallback handling
         import matplotlib.font_manager as fm
@@ -239,10 +239,12 @@ class GradCAMVisualizer:
         # Determine prediction status using 0.9 threshold
         pred_status = "Present" if prediction > 0.9 else "Absent"
         
+        if gt_status is not None:
+            gt_status_print = "Present" if gt_status.lower() == "present" else "Absent"
         # Create title with prediction, ground truth, and status
         title_info = f'Prediction: {pred_status}'
         if ground_truth is not None and gt_status is not None:
-            title_info += f'\nGround Truth: {ground_truth:.0f} ({gt_status})'
+            title_info += f'\nGround Truth: {gt_status_print}'
         
         # Original image
         axes[0].imshow(image, cmap='gray')
@@ -250,19 +252,19 @@ class GradCAMVisualizer:
         axes[0].axis('off')
         
         # Plot heatmap
-        axes[1].imshow(heatmap, cmap=self.colormap)
-        axes[1].set_title('Grad-CAM Heatmap')
-        axes[1].axis('off')
+        # axes[1].imshow(heatmap, cmap=self.colormap)
+        # axes[1].set_title('Grad-CAM Heatmap')
+        # axes[1].axis('off')
         
         # Overlay
         overlaid = self.overlay_heatmap(image, heatmap, alpha=alpha)
-        axes[2].imshow(overlaid)
-        axes[2].set_title(f'Grad-CAM Overlay (α={alpha})\n{target_name} Attention')
-        axes[2].axis('off')
+        axes[1].imshow(overlaid)
+        axes[1].set_title(f'Grad-CAM Overlay \n{target_name} Attention')
+        axes[1].axis('off')
         
         # Add colorbar for heatmap reference
-        im = axes[2].imshow(overlaid)
-        cbar = plt.colorbar(im, ax=axes[2], fraction=0.046, pad=0.04)
+        im = axes[1].imshow(overlaid)
+        cbar = plt.colorbar(im, ax=axes[1], fraction=0.046, pad=0.04)
         cbar.set_label('Attention Intensity', rotation=270, labelpad=15)
         
         plt.tight_layout()
