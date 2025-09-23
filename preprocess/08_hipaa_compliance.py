@@ -15,14 +15,16 @@ import numpy as np
 from datetime import datetime
 import hashlib
 import uuid
+import re
+import sys
 
 def load_input_data():
     """Load the input dataset used by 07_modeling_dataset_with_splits.py"""
     print("🚀 HIPAA COMPLIANCE AND DATA PRIVACY PROCESSING")
     print("=" * 60)
     
-    # Same input file as used in 07_modeling_dataset_with_splits.py
-    data_path = "../../datasets/full_data/biomarkers_with_hcc_codes_20250909_062523.csv"
+    # Updated input file location (preprocess directory)
+    data_path = "../../datasets/full_data/preprocess/biomarkers_with_hcc_codes_20250909_062523.csv"
     
     print("📊 Loading input dataset...")
     try:
@@ -265,12 +267,165 @@ def anonymize_dates_and_ages(df):
     
     return df, anonymized_date_columns
 
+def _compile_pii_patterns():
+    """Compile regex patterns for common PII in free-text fields."""
+    patterns = {
+        'email': re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
+        'phone': re.compile(r"(?:(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]?\d{3}[\s.-]?\d{4})"),
+        'ssn': re.compile(r"\b\d{3}-?\d{2}-?\d{4}\b"),
+        'ip': re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b"),
+        'url': re.compile(r"\bhttps?://[\w.-]+(?:/[\w\-./?%&=]*)?\b", re.IGNORECASE),
+    }
+    return patterns
+
+def scrub_pii_in_free_text(df):
+    """Redact common PII patterns (emails, phones, SSNs, URLs, IPs) from object/text columns.
+
+    Replaces detected patterns with tokens: [REDACTED_EMAIL], [REDACTED_PHONE], etc.
+    Returns the updated DataFrame and a summary of redaction counts per column/pattern.
+    """
+    print("\n🧽 Scrubbing PII from free-text columns...")
+    patterns = _compile_pii_patterns()
+    redaction_summary = {}
+
+    # Identify candidate text columns
+    text_columns = [c for c in df.columns if df[c].dtype == object]
+    print(f"📋 Found {len(text_columns)} text columns to scan for PII")
+
+    def redact_value(val):
+        if not isinstance(val, str) or val == "":
+            return val, {}
+        counts = {}
+        new_val = val
+        for name, regex in patterns.items():
+            before = new_val
+            token = f"[REDACTED_{name.upper()}]"
+            new_val = regex.sub(token, new_val)
+            if new_val != before:
+                counts[name] = counts.get(name, 0) + (before.count('@') if name == 'email' else 1)
+        return new_val, counts
+
+    # Apply redaction column-wise to keep track of counts
+    for col in text_columns:
+        col_counts = {k: 0 for k in patterns.keys()}
+        if df[col].notna().any():
+            redacted_values = []
+            for v in df[col].tolist():
+                nv, cts = redact_value(v)
+                redacted_values.append(nv)
+                for k, vcount in cts.items():
+                    col_counts[k] += vcount
+            df[col] = redacted_values
+        redaction_summary[col] = {k: v for k, v in col_counts.items() if v > 0}
+
+    # Print a concise summary
+    total_events = 0
+    for col, col_counts in redaction_summary.items():
+        if col_counts:
+            pretty = ", ".join([f"{k}:{v}" for k, v in col_counts.items()])
+            print(f"   🔒 {col}: {pretty}")
+            total_events += sum(col_counts.values())
+    if total_events == 0:
+        print("✅ No PII patterns detected in text columns")
+    else:
+        print(f"✅ Completed PII scrubbing with {total_events} total redactions across text columns")
+
+    return df, redaction_summary
+
+def _prepare_output_paths():
+    """Prepare output CSV and log file paths with timestamp in full_data dir."""
+    output_dir = "../../datasets/full_data"
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_csv = os.path.join(output_dir, f"abdct_bench_hipaa_compliant_{timestamp}.csv")
+    log_file = os.path.join(output_dir, f"abdct_bench_hipaa_compliant_{timestamp}.log")
+    return output_dir, output_csv, log_file
+
+class _Tee:
+    """Tee stdout/stderr to both console and a file."""
+    def __init__(self, stream, logfile_handle):
+        self.stream = stream
+        self.log = logfile_handle
+    def write(self, data):
+        self.stream.write(data)
+        self.log.write(data)
+    def flush(self):
+        self.stream.flush()
+        self.log.flush()
+
 def main():
     """Main execution function."""
     print("=" * 80)
     print("HIPAA COMPLIANCE: DATA CLEANING AND PRIVACY FILTERING")
     print("=" * 80)
-    print(f"Processing started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # Prepare output and set up logging to file (tee)
+    output_dir, output_csv, log_file = _prepare_output_paths()
+    with open(log_file, 'w') as lf:
+        tee_out = _Tee(sys.stdout, lf)
+        tee_err = _Tee(sys.stderr, lf)
+        sys_stdout_orig, sys_stderr_orig = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = tee_out, tee_err
+        try:
+            print(f"Logs will be saved to: {log_file}")
+            print(f"Processing started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # 1. Load input data
+            df = load_input_data()
+            if df is None:
+                return
+            
+            # 2. Remove fully missing columns
+            df = remove_fully_missing_columns(df)
+            
+            # 3. Remove unknown gender records
+            df = remove_unknown_gender_records(df)
+            if df is None:
+                return
+            
+            # 4. Remove HIPAA-sensitive columns
+            df, removed_columns = remove_hipaa_sensitive_columns(df)
+            
+            # 5. Remove specific additional HIPAA-sensitive columns (safe with only 49 duplicates)
+            specific_columns_to_remove = [
+                'subject.label',
+                'StudyInfo_MRN', 
+                'PAT_ID_MASKED',
+                'ACC_NUM_EXTRACTED',
+                'ACC_NUM'
+            ]
+            df, additional_removed = remove_specific_hipaa_columns(df, specific_columns_to_remove)
+            print(f"✅ Additional HIPAA columns removed: {len(additional_removed)} columns")
+            
+            # 6. Anonymize dates and ages
+            df, anonymized_dates = anonymize_dates_and_ages(df)
+            
+            # 7. Scrub PII from free-text columns (emails, phones, SSNs, URLs, IPs)
+            df, pii_summary = scrub_pii_in_free_text(df)
+            
+            # 8. Confirm final record count
+            success = confirm_record_count(df, expected_count=23506)
+            
+            # 9. Save final HIPAA-compliant dataset
+            print(f"\n💾 Saving HIPAA-compliant dataset to: {output_csv}")
+            df.to_csv(output_csv, index=False)
+            print(f"✅ Saved: {output_csv}")
+            print(f"📁 Output directory: {output_dir}")
+            
+            print("\n" + "=" * 80)
+            if success:
+                print("✅ HIPAA COMPLIANCE PROCESSING COMPLETED SUCCESSFULLY!")
+                print(f"📊 Final dataset: {len(df):,} records × {len(df.columns)} columns")
+                print(f"🎯 Ready for downstream use!")
+            else:
+                print("⚠️  HIPAA COMPLIANCE PROCESSING COMPLETED WITH ISSUES")
+                print("   Please review the record count mismatch")
+            
+            print(f"📅 Completed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"📝 Log file: {log_file}")
+        finally:
+            # restore std streams
+            sys.stdout, sys.stderr = sys_stdout_orig, sys_stderr_orig
     
     # 1. Load input data
     df = load_input_data()
@@ -301,8 +456,11 @@ def main():
     
     # 6. Anonymize dates and ages
     df, anonymized_dates = anonymize_dates_and_ages(df)
+
+    # 7. Scrub PII from free-text columns (emails, phones, SSNs, URLs, IPs)
+    df, pii_summary = scrub_pii_in_free_text(df)
     
-    # 7. Confirm final record count
+    # 8. Confirm final record count
     success = confirm_record_count(df, expected_count=23506)
     
     print("\n" + "=" * 80)
