@@ -1,0 +1,75 @@
+CSV-PNG MATCHING REPORT
+==================================================
+
+Generated: 2025-11-16 10:26:12
+CSV File: 2025_08_31_Biomarkers_Outcomes_Joined_Fixed.csv
+PNG Directory: data
+
+MATCHING SUMMARY
+------------------------------
+Total CSV identifiers: 64,505
+Total PNG files: 53,357
+Successful matches: 48,770
+Unmatched CSV: 15,735
+Unmatched PNG: 4,587
+
+MATCHING RATES
+------------------------------
+CSV Match Rate: 75.61%
+PNG Match Rate: 91.40%
+Overall Efficiency: 75.61%
+
+SAMPLE UNMATCHED CSV IDENTIFIERS
+----------------------------------------
+  051914-2501
+  062711-0254
+  060520-3596
+  010716-0086
+  012717-0357
+  050421-3931
+  040804-0130
+  030507-0109
+  022521-3203
+  111315-0993
+  062918-0580
+  121514-0811
+  071719-1818
+  040711-0266
+  062619-3021
+  120811-0280
+  121119-3935
+  050117-1525
+  041817-1195
+  081116-0554
+  ... and 15,715 more
+
+SAMPLE UNMATCHED PNG FILES
+-----------------------------------
+  011912-0477.png
+  021020-3579.png
+  022421-1089.png
+  011713-0405.png
+  021520-0784.png
+  011021-0361.png
+  020106-0109.png
+  120506-0184.png
+  120516-1143.png
+  021712-0404.png
+  020316-1807.png
+  073004-0111.png
+  122214-2507.png
+  020317-3624.png
+  022707-0271.png
+  013106-0165.png
+  013017-2808.png
+  012505-0151.png
+  042425-6842.png
+  120818-1488.png
+  ... and 4,567 more
+
+RECOMMENDATIONS
+------------------------------
+⚠️  Lower matching rate. Consider investigating data quality issues.
+1. Review unmatched CSV identifiers for format inconsistencies
+2. Check unmatched PNG files for naming convention violations
+3. Consider fuzzy matching for remaining unmatched pairs

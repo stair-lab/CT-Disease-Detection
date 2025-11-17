@@ -1,0 +1,33 @@
+================================================================================
+PNG FILENAME STANDARDIZATION REPORT
+================================================================================
+Generated: 2025-11-16 10:21:45
+Directory: /lfs/skampere2/0/mahmedc/Comorbidities-Detection/datasets/full_data/data
+
+VALIDATION RESULTS
+----------------------------------------
+Total files processed:     53,357
+Unique standard names:     53,357
+Conflicts detected:        0
+Validation status:         PASSED
+
+CONVERSION BREAKDOWN
+----------------------------------------
+schema_2_no_change        27,249 (51.07%)
+schema_1_to_2             25,511 (47.81%)
+schema_3_to_2_10digit     556 (1.04%)
+special_suffix_kept       1 (0.00%)
+schema_3_to_2_11digit     40 (0.07%)
+
+RENAMING RESULTS
+----------------------------------------
+Files attempted:           53,357
+Successfully renamed:      53,357
+Failed to rename:          0
+Skipped (conflicts):       0
+
+RECOMMENDATIONS
+----------------------------------------
+✅ Standardization completed successfully!
+   All PNG files now follow the NNNNNN-NNNN format.
+   Ready for CSV-PNG matching.
