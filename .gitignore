@@ -3,4 +3,5 @@
 *.csv
 *.pth
 *.log
+subgroup_analysis_results*
 !experimentation_plan_simplified.csv
