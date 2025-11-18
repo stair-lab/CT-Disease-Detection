@@ -14,7 +14,7 @@ def analyze_conflicts():
     conflicts_file = "standardization_results/filename_conflicts_20250904_045330.csv"
     conflicts_df = pd.read_csv(conflicts_file)
     
-    png_directory = Path("/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data/data")
+    png_directory = Path("/lfs/skampere2/0/mahmedc/Comorbidities-Detection/datasets/full_data/data")
     
     print(f"📊 Found {len(conflicts_df)} conflicts to resolve")
     
@@ -128,7 +128,7 @@ def execute_resolution(resolution_plan, dry_run=True):
     else:
         print("\n🔄 Executing conflict resolution...")
     
-    png_directory = Path("/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data/data")
+    png_directory = Path("/lfs/skampere2/0/mahmedc/Comorbidities-Detection/datasets/full_data/data")
     
     stats = {
         'files_removed': 0,

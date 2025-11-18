@@ -338,7 +338,7 @@ def main():
     print("=" * 60)
     
     # Initialize standardizer
-    png_directory = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data/data"
+    png_directory = "/lfs/skampere2/0/mahmedc/Comorbidities-Detection/datasets/full_data/data"
     standardizer = PNGStandardizer(png_directory)
     
     # Step 1: Create mapping

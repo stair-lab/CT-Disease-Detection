@@ -114,7 +114,7 @@ def main():
     print(f"Processing started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Define input and output directories
-    input_dir = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/datasets/full_data"
+    input_dir = "/lfs/skampere2/0/mahmedc/Comorbidities-Detection/datasets/full_data"
     output_dir = input_dir  # Same directory for output
     
     # Define file pairs (input, output)
