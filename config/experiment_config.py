@@ -393,7 +393,7 @@ def create_scheduler(optimizer, config: ExperimentConfig, total_epochs: int):
 
 if __name__ == "__main__":
     # Test configuration loading
-    csv_path = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/experimentation_plan_simplified.csv"
+    csv_path = "/lfs/skampere2/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/experimentation_plan_simplified.csv"
     
     if os.path.exists(csv_path):
         loader = ExperimentConfigLoader(csv_path)

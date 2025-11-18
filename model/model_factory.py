@@ -48,19 +48,19 @@ class StableDiffusionVAEEncoder(nn.Module):
         
         # Set cache directory to avoid AFS permission issues
         import os
-        os.environ['HF_HOME'] = '/lfs/turing1/0/mahmedc/.cache/huggingface'
-        os.environ['TRANSFORMERS_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/transformers'
-        os.environ['HF_HUB_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/hub'
+        os.environ['HF_HOME'] = '/lfs/skampere2/0/mahmedc/.cache/huggingface'
+        os.environ['TRANSFORMERS_CACHE'] = '/lfs/skampere2/0/mahmedc/.cache/huggingface/transformers'
+        os.environ['HF_HUB_CACHE'] = '/lfs/skampere2/0/mahmedc/.cache/huggingface/hub'
         
         # Create cache directories if they don't exist
-        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/hub', exist_ok=True)
-        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/transformers', exist_ok=True)
+        os.makedirs('/lfs/skampere2/0/mahmedc/.cache/huggingface/hub', exist_ok=True)
+        os.makedirs('/lfs/skampere2/0/mahmedc/.cache/huggingface/transformers', exist_ok=True)
         
         # Load the VAE encoder from Stable Diffusion v1.5
         self.vae = AutoencoderKL.from_pretrained(
             model_id, 
             subfolder="vae",
-            cache_dir='/lfs/turing1/0/mahmedc/.cache/huggingface'
+            cache_dir='/lfs/skampere2/0/mahmedc/.cache/huggingface'
         )
         
         # Only use the encoder part
@@ -510,13 +510,13 @@ class ModelFactory:
         
         # Set cache directory to avoid AFS permission issues
         import os
-        os.environ['HF_HOME'] = '/lfs/turing1/0/mahmedc/.cache/huggingface'
-        os.environ['TRANSFORMERS_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/transformers'
-        os.environ['HF_HUB_CACHE'] = '/lfs/turing1/0/mahmedc/.cache/huggingface/hub'
+        os.environ['HF_HOME'] = '/lfs/skampere2/0/mahmedc/.cache/huggingface'
+        os.environ['TRANSFORMERS_CACHE'] = '/lfs/skampere2/0/mahmedc/.cache/huggingface/transformers'
+        os.environ['HF_HUB_CACHE'] = '/lfs/skampere2/0/mahmedc/.cache/huggingface/hub'
         
         # Create cache directories if they don't exist
-        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/hub', exist_ok=True)
-        os.makedirs('/lfs/turing1/0/mahmedc/.cache/huggingface/transformers', exist_ok=True)
+        os.makedirs('/lfs/skampere2/0/mahmedc/.cache/huggingface/hub', exist_ok=True)
+        os.makedirs('/lfs/skampere2/0/mahmedc/.cache/huggingface/transformers', exist_ok=True)
         
         # Use timm for DINOv2 models
         if "Small" in architecture:
@@ -549,12 +549,13 @@ class ModelFactory:
         head_type = "linear_probe" if fine_tuning_strategy == "linear_probe" else "flexible"
         
         if pretrained_weights == "ImageNet-22K":
-            model = models.swin_b(weights=Swin_B_Weights.IMAGENET22K_V1)
+            # Use IMAGENET1K_V1 as IMAGENET22K_V1 is not available in torchvision
+            model = models.swin_b(weights=Swin_B_Weights.IMAGENET1K_V1)
+            # Keep 3-channel input for pretrained weights, we'll convert images to 3-channel
         else:
             model = models.swin_b(weights=None)
-        
-        # Modify for single channel input
-        model.features[0][0] = nn.Conv2d(1, 128, kernel_size=4, stride=4)
+            # For non-pretrained, modify for single channel input
+            model.features[0][0] = nn.Conv2d(1, 128, kernel_size=4, stride=4)
         
         # Replace head with appropriate multi-task head
         feature_dim = model.head.in_features
@@ -803,7 +804,7 @@ class ModelFactory:
             import os
             
             # Path to the RadImageNet checkpoint
-            radimagenet_path = "/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/radimagenet_ckpt/resnet50/ResNet50_RadImageNet.pt"
+            radimagenet_path = "/lfs/skampere2/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection/radimagenet_ckpt/resnet50/ResNet50_RadImageNet.pt"
             
             if os.path.exists(radimagenet_path):
                 print(f"Loading ResNet-50 with RadImageNet weights from {radimagenet_path}")

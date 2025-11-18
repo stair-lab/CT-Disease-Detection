@@ -750,7 +750,7 @@ def main():
     parser.add_argument('--data_dir', required=True, help='Path to dataset directory')
     parser.add_argument('--biomarker_config', required=True, 
                        help='Path to biomarker configuration file (YAML or JSON)')
-    parser.add_argument('--output_base_dir', default='/lfs/turing1/0/mahmedc/Comorbidities-Detection/models', 
+    parser.add_argument('--output_base_dir', default='/lfs/skampere2/0/mahmedc/Comorbidities-Detection/models', 
                        help='Base directory for model outputs')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--model_name', help='Specific model to train')

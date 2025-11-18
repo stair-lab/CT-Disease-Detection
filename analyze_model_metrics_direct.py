@@ -702,13 +702,13 @@ def main():
     """Main function to run the analysis."""
     parser = argparse.ArgumentParser(description='Analyze model metrics from Comorbidities-Detection models directory with ranking')
     parser.add_argument('--models_base_dir', type=str, 
-                       default="/lfs/turing1/0/mahmedc/Comorbidities-Detection/models",
-                       help='Base path to the models directory (default: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models)')
+                       default="/lfs/skampere2/0/mahmedc/Comorbidities-Detection/models",
+                       help='Base path to the models directory (default: /lfs/skampere2/0/mahmedc/Comorbidities-Detection/models)')
     parser.add_argument('--directories', type=str, nargs='+',
                        help='List of directory names to process (e.g., age_only calcium_only). If not provided, will auto-detect directories with "only" in name.')
     parser.add_argument('--output_dir', type=str,
-                       default="/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection",
-                       help='Path to the output directory (default: /lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection)')
+                       default="/lfs/skampere2/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection",
+                       help='Path to the output directory (default: /lfs/skampere2/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection)')
     parser.add_argument('--output_filename', type=str,
                        help='Output filename (default: model_metrics_with_ranking_TIMESTAMP.csv)')
     

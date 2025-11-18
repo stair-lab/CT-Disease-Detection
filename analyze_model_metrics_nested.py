@@ -421,11 +421,11 @@ def main():
     """Main function to run the analysis."""
     parser = argparse.ArgumentParser(description='Analyze model metrics from Comorbidities-Detection models directory with nested structure')
     parser.add_argument('--models_dir', type=str, 
-                       default="/lfs/turing1/0/mahmedc/Comorbidities-Detection/models",
-                       help='Path to the models directory (default: /lfs/turing1/0/mahmedc/Comorbidities-Detection/models)')
+                       default="/lfs/skampere2/0/mahmedc/Comorbidities-Detection/models",
+                       help='Path to the models directory (default: /lfs/skampere2/0/mahmedc/Comorbidities-Detection/models)')
     parser.add_argument('--output_dir', type=str,
-                       default="/lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection",
-                       help='Path to the output directory (default: /lfs/turing1/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection)')
+                       default="/lfs/skampere2/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection",
+                       help='Path to the output directory (default: /lfs/skampere2/0/mahmedc/Comorbidities-Detection/CT-Disease-Detection)')
     parser.add_argument('--output_filename', type=str,
                        help='Output filename (default: model_metrics_nested_TIMESTAMP.csv)')
     
