@@ -112,7 +112,7 @@ def run_single_experiment(config, data_dir, biomarker_config_path, output_base_d
     
     # Ensure Hugging Face cache directory exists on /lfs filesystem
     # Use /lfs path instead of /afs to avoid subprocess permission issues
-    hf_cache_dir = '/lfs/turing1/0/mahmedc/.cache/huggingface'
+    hf_cache_dir = '/lfs/skampere2/0/mahmedc/.cache/huggingface'
     os.makedirs(os.path.join(hf_cache_dir, 'transformers'), exist_ok=True)
     os.makedirs(os.path.join(hf_cache_dir, 'datasets'), exist_ok=True)
     os.makedirs(os.path.join(hf_cache_dir, 'hub'), exist_ok=True)
@@ -186,6 +186,11 @@ def setup_logging(log_file=None):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = f"experiment_logs/experiments_{timestamp}.log"
     
+    # Create log directory if it doesn't exist
+    log_dir = os.path.dirname(log_file)
+    if log_dir and not os.path.exists(log_dir):
+        os.makedirs(log_dir, exist_ok=True)
+    
     # Create logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -222,7 +227,7 @@ def main():
                        required=True,
                        help='Path to dataset directory containing train.csv and val.csv')
     parser.add_argument('--output_base_dir', 
-                       default='/lfs/turing1/0/mahmedc/Comorbidities-Detection/models',
+                       default='/lfs/skampere2/0/mahmedc/Comorbidities-Detection/models',
                        help='Base directory for model outputs')
     parser.add_argument('--epochs', 
                        type=int, 
