@@ -323,7 +323,12 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     # Detect ViT checkpoints (timm DINOv2)
     is_vit = any(any(tok in k for tok in ['cls_token', 'pos_embed', 'patch_embed', 'blocks']) for k in state_dict_keys) or \
              ('vit' in config.model.lower() or 'dino' in config.model.lower())
+    
+    # Detect Swin Transformer models - they also use CLS token classification and need similar handling
+    is_swin = 'swin' in config.model.lower() or any('swin' in k.lower() for k in state_dict_keys[:5])
+    
     print(f"   ViT detection: {is_vit}")
+    print(f"   Swin detection: {is_swin}")
 
     # Debug: Print detection results
     print(f"   Detection results: feature_extractor={has_feature_extractor}, flattened_processor={has_flattened_processor}, feature_processor={has_feature_processor}")
@@ -350,13 +355,24 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
             print(f"⚠️  Detected custom ResNet50 with nested structure (keys contain 'resnet50.fc')")
         detected_strategy = "Direct classification head"  # Most likely
 
+    # Swin models with CLS token classification should skip head alignment like ViT
+    # Check if single_target_strategy is CLS token classification
+    uses_cls_token_strategy = (single_target_strategy == "CLS token classification" or 
+                              (detected_strategy == "CLS token classification" if detected_strategy else False))
+    
+    # Treat Swin with CLS token strategy like ViT for head alignment purposes
+    skip_head_alignment = is_vit or (is_swin and uses_cls_token_strategy)
+    
+    print(f"   Uses CLS token strategy: {uses_cls_token_strategy}")
+    print(f"   Skip head alignment: {skip_head_alignment}")
+
     if detected_strategy and single_target_strategy != detected_strategy:
         print(f"⚠️  Auto-detected strategy mismatch: config says '{single_target_strategy}' but state_dict suggests '{detected_strategy}'")
         print(f"   State dict keys suggest: feature_extractor={has_feature_extractor}, flattened_processor={has_flattened_processor}, feature_processor={has_feature_processor}, nested_resnet34={has_nested_resnet}, nested_resnet18={has_nested_resnet18}, nested_resnet50={has_nested_resnet50}")
-        if not is_vit:
+        if not skip_head_alignment:
             single_target_strategy = detected_strategy
         else:
-            print("   ⏭️  Keeping ViT single-target strategy from checkpoint (do not override)")
+            print(f"   ⏭️  Keeping {'ViT/Swin' if is_swin else 'ViT'} single-target strategy from checkpoint (do not override)")
     
     print(f"Creating model: {config.model}")
     print(f"Fine-tuning strategy: {config.fine_tuning_strategy}")
@@ -384,7 +400,7 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         biomarker_config=biomarker_config,
         single_target_strategy=single_target_strategy,  # Use the extracted strategy
         # Pass through inferred target feature dim for head alignment
-        single_target_output_dim=(None if is_vit else expected_head_dim)
+        single_target_output_dim=(None if skip_head_alignment else expected_head_dim)
     )
     
     # Handle dynamic layer creation for DirectClassificationHeadExtractor
@@ -398,10 +414,10 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
     print(f"   Debug: model has fc={has_fc}, classifier={has_classifier}")
 
     # If single-target strategy is direct head, align feature extractor output dim to checkpoint head dim
-    # For ViT models, skip this alignment to preserve the exact training-time head wiring
+    # For ViT and Swin models with CLS token strategy, skip this alignment to preserve the exact training-time head wiring
     try:
-        if is_vit:
-            raise Exception("Skip head alignment for ViT")
+        if skip_head_alignment:
+            raise Exception(f"Skip head alignment for {'ViT/Swin' if is_swin else 'ViT'}")
         # Find any task head weight in checkpoint to infer expected feature dim
         head_weight_key = None
         for k in state_dict_keys:
@@ -802,6 +818,10 @@ def find_optimal_thresholds_on_validation(model: torch.nn.Module, biomarker_conf
             images = images.to(device)
             targets = targets.to(device)
             
+            # Convert single channel to 3-channel for models expecting RGB (matches train.py validation)
+            if images.shape[1] == 1:
+                images = images.repeat(1, 3, 1, 1)
+            
             # Forward pass
             predictions = model(images)
             
@@ -1095,6 +1115,10 @@ def run_inference(model: torch.nn.Module, test_dataloader: DataLoader,
             
             images = images.to(device)
             
+            # Convert single channel to 3-channel for models expecting RGB (matches train.py validation)
+            if images.shape[1] == 1:
+                images = images.repeat(1, 3, 1, 1)
+            
             # Forward pass
             predictions = model(images)
             all_predictions.append(predictions.cpu())
@@ -1113,16 +1137,19 @@ def run_inference(model: torch.nn.Module, test_dataloader: DataLoader,
     if not only_pred and all_targets:
         print("Calculating metrics...")
         
-        # Convert targets to tensor format
+        # Convert targets to tensor format - CRITICAL: ensure predictions and targets are aligned
         target_tensors = []
-        for study_id in study_ids:
+        prediction_indices = []
+        for idx, study_id in enumerate(study_ids):
             if study_id in all_targets:
                 target_tensors.append(torch.from_numpy(all_targets[study_id]))
+                prediction_indices.append(idx)
         
         if target_tensors:
             target_tensor = torch.stack(target_tensors).to(device)
-            all_predictions_gpu = all_predictions.to(device)
-            metrics = calculate_enhanced_metrics(all_predictions_gpu, target_tensor, biomarker_config, optimal_thresholds)
+            # Only use predictions that have corresponding targets
+            aligned_predictions = all_predictions[prediction_indices].to(device)
+            metrics = calculate_enhanced_metrics(aligned_predictions, target_tensor, biomarker_config, optimal_thresholds)
             processed_results['metrics'] = metrics
     
     return processed_results
