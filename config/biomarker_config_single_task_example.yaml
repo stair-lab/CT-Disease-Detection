@@ -1,0 +1,95 @@
+# Single-Task Biomarker Configuration Example
+#
+# This file shows how to configure training for a single prediction target.
+# Pass this file to --biomarker_config in train.py or test.py.
+#
+# To define your own config, copy this file, edit the biomarker entries,
+# and point --biomarker_config at your new file.
+#
+# For the full multi-task configuration used in the published experiments,
+# see biomarker_config_multitask_example.yaml.
+
+experiment_name: "mortality_single_task"
+description: "Single-task prediction of Mortality in AbdCTBench"
+
+# -------------------------------------------------------------------------
+# Binary classification tasks  (output: sigmoid probability, label: 0 or 1)
+# -------------------------------------------------------------------------
+# Each entry requires:
+#   name          - column name in train.csv / val.csv / test.csv
+#   description   - human-readable label (informational only)
+#   positive_class - the CSV value that maps to label=1
+#   negative_class - the CSV value that maps to label=0  (default: "ABSENT")
+#
+# Available binary targets in AbdCTBench:
+#   MORTALITY, HCC12, HCC18, HCC96, HCC108,
+#   CALCIUMSCORING_ABDOMINALAGATSTON_BINARY
+binary_biomarkers:
+  - name: "MORTALITY"
+    description: "Death status"
+    positive_class: "PRESENT"
+    negative_class: "ABSENT"
+
+# -------------------------------------------------------------------------
+# Multiclass classification tasks  (output: softmax probabilities)
+# -------------------------------------------------------------------------
+# Each entry requires:
+#   name    - column name in the CSV
+#   classes - ordered list of class labels (determines one-hot encoding order)
+#
+# Leave empty if not needed.
+multiclass_biomarkers: []
+
+# -------------------------------------------------------------------------
+# Continuous regression tasks  (output: raw continuous value)
+# -------------------------------------------------------------------------
+# Each entry requires:
+#   name          - column name in the CSV
+#   min_value     - minimum expected value (used for min-max normalization)
+#   max_value     - maximum expected value
+#   normalization - normalization method; currently only "min_max" is supported
+#
+# The model predicts a normalized value in [0, 1]; metrics are reported on
+# the denormalized scale.
+#
+# Leave empty if not needed.
+continuous_biomarkers: []
+
+# -------------------------------------------------------------------------
+# Preprocessing settings
+# -------------------------------------------------------------------------
+preprocessing:
+  image_size: 256        # images are resized to this square size
+  normalize_images: true
+  convert_to_rgb: true   # grayscale CT slices are replicated to 3 channels
+
+# -------------------------------------------------------------------------
+# Training settings
+# -------------------------------------------------------------------------
+training:
+  class_weighting: true    # use inverse-frequency weighting for binary tasks
+  balanced_sampling: true  # balanced batch sampling
+
+# -------------------------------------------------------------------------
+# Validation / threshold settings
+# -------------------------------------------------------------------------
+validation:
+  threshold_optimization: true
+  optimization_metric: "f1_score"   # metric used to pick the best decision threshold
+  per_biomarker_thresholds: true    # optimize a separate threshold per biomarker
+  threshold_search_range: [0.1, 0.9]
+  threshold_search_steps: 9         # evaluates thresholds 0.1, 0.2, ..., 0.9
+  fallback_threshold: 0.5
+
+  metrics:
+    - "auroc"
+    - "accuracy"
+    - "sensitivity"
+    - "specificity"
+    - "f1_score"
+    - "precision"
+    - "recall"
+  regression_metrics:
+    - "mse"
+    - "mae"
+    - "r2_score"

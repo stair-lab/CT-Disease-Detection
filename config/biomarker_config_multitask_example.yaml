@@ -1,0 +1,107 @@
+# Multi-Task Biomarker Configuration — Published Experiments
+#
+# This is the exact configuration used for the multi-task experiments reported
+# in the paper. It predicts 6 binary clinical targets and 1 continuous target
+# (patient age) simultaneously from a single abdominal CT slice.
+#
+# Pass this file to --biomarker_config in train.py or test.py.
+#
+# For a minimal single-task example with detailed field descriptions,
+# see biomarker_config_single_task_example.yaml.
+
+experiment_name: "comorbidities_detection_multitask"
+description: "Multi-task prediction of comorbidities and demographics from AbdCTBench"
+
+# -------------------------------------------------------------------------
+# Binary classification tasks (9 targets)
+# -------------------------------------------------------------------------
+binary_biomarkers:
+  - name: "MORTALITY"
+    description: "Death in the followup period"
+    positive_class: "PRESENT"
+
+  - name: "HCC12"
+    description: "HCC code 12 — Breast, Prostate, and other cancers"
+    positive_class: "PRESENT"
+
+  - name: "HCC18"
+    description: "HCC code 18 — Diabetes with Chronic Complications"
+    positive_class: "PRESENT"
+
+  - name: "HCC96"
+    description: "HCC code 96 — Cardiac arrhythmias"
+    positive_class: "PRESENT"
+
+  - name: "HCC108"
+    description: "HCC code 108 — Vascular disease"
+    positive_class: "PRESENT"
+
+  - name: "HCC111"
+    description: "HCC code 111 — Chronic obstructive pulmonary disease"
+    positive_class: "PRESENT"
+
+  - name: "T2D"
+    description: "Type 2 Diabetes"
+    positive_class: "PRESENT"
+
+  - name: "MI"
+    description: "Myocardial Infarction"
+    positive_class: "PRESENT"
+
+  - name: "CALCIUMSCORING_ABDOMINALAGATSTON_BINARY"
+    description: "High abdominal aortic calcium score (Agatston > 1000)"
+    positive_class: "PRESENT"
+
+# -------------------------------------------------------------------------
+# Multiclass classification tasks
+# -------------------------------------------------------------------------
+multiclass_biomarkers: []
+
+# -------------------------------------------------------------------------
+# Continuous regression tasks (1 target)
+# -------------------------------------------------------------------------
+continuous_biomarkers:
+  - name: "AGE"
+    description: "Patient age in years (min-max normalized to [0, 1] during training)"
+    min_value: 18
+    max_value: 89
+    normalization: "min_max"
+
+# -------------------------------------------------------------------------
+# Preprocessing settings
+# -------------------------------------------------------------------------
+preprocessing:
+  image_size: 256
+  normalize_images: true
+  convert_to_rgb: true
+
+# -------------------------------------------------------------------------
+# Training settings
+# -------------------------------------------------------------------------
+training:
+  class_weighting: true
+  balanced_sampling: true
+
+# -------------------------------------------------------------------------
+# Validation / threshold settings
+# -------------------------------------------------------------------------
+validation:
+  threshold_optimization: true
+  optimization_metric: "f1_score"
+  per_biomarker_thresholds: true
+  threshold_search_range: [0.1, 0.9]
+  threshold_search_steps: 9
+  fallback_threshold: 0.5
+
+  metrics:
+    - "auroc"
+    - "accuracy"
+    - "sensitivity"
+    - "specificity"
+    - "f1_score"
+    - "precision"
+    - "recall"
+  regression_metrics:
+    - "mse"
+    - "mae"
+    - "r2_score"
