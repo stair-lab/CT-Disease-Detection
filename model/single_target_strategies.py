@@ -279,7 +279,3 @@ def get_strategy_from_name(strategy_name: str) -> SingleTargetStrategy:
     
     return STRATEGY_MAPPING[strategy_name]
 
-
-def get_strategy_from_csv(csv_value: str) -> SingleTargetStrategy:
-    """Backward-compatible alias for older call sites."""
-    return get_strategy_from_name(csv_value)
