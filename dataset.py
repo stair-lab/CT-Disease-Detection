@@ -29,10 +29,6 @@ class ClassifierDataset(Dataset):
         csv_name = 'train.csv' if train else 'val.csv'
         self.df = pd.read_csv(os.path.join(data_path, csv_name))
         
-        # Handle RAF column if it doesn't exist
-        if 'RAF' not in self.df.columns:
-            self.df['RAF'] = 0
-        
         # Apply age filtering for HIPAA compliance
         self.df = self._filter_age_records()
         
