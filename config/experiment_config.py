@@ -16,6 +16,7 @@ MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "ResNet-18":   {"pretrained_weights": "ImageNet", "single_target_strategy": "Direct classification head"},
     "ResNet-34":   {"pretrained_weights": "ImageNet", "single_target_strategy": "Direct classification head"},
     "DenseNet-121":{"pretrained_weights": "ImageNet", "single_target_strategy": "Direct classification head"},
+    "EfficientNet-B0": {"pretrained_weights": "ImageNet", "single_target_strategy": "Direct classification head"},
     "ViT-Small (DINOv2)": {"pretrained_weights": "DINOv2 (self-supervised)",  "single_target_strategy": "CLS token classification"},
     "Swin Transformer-Base": {"pretrained_weights": "ImageNet-22K", "single_target_strategy": "CLS token classification"},
     "ResNet-50 (RadImageNet)": {"pretrained_weights": "RadImageNet", "single_target_strategy": "Direct classification head"},
