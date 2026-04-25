@@ -21,11 +21,17 @@ MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "ResNet-50 (RadImageNet)": {"pretrained_weights": "RadImageNet", "single_target_strategy": "Direct classification head"},
 }
 
-# Default augmentation string used in all published experiments
-DEFAULT_AUGMENTATIONS = (
-    "rotation (±15°), horizontal flip, random crop, "
-    "color jitter (brightness±0.2, contrast±0.2), ImageNet normalization"
-)
+DEFAULT_AUGMENTATION_PARAMS: Dict[str, Any] = {
+    "rotation": 15,
+    "horizontal_flip": True,
+    "random_crop": True,
+    "color_jitter": True,
+    "brightness": 0.2,
+    "contrast": 0.2,
+    "imagenet_norm": True,
+}
+
+DEFAULT_AUGMENTATIONS = DEFAULT_AUGMENTATION_PARAMS.copy()
 
 
 def get_model_defaults(model_name: str) -> Dict[str, str]:
@@ -54,7 +60,7 @@ class ExperimentConfig:
     scheduler: str
 
     # Training configuration
-    image_augmentations: str
+    image_augmentations: Dict[str, Any]
     dropout: float
     loss_specific_params: str
     multi_target_strategy: str
@@ -91,6 +97,8 @@ class ExperimentConfig:
 
         if not isinstance(self.learning_rate, list):
             self.learning_rate = [self.learning_rate]
+
+        self.image_augmentations = parse_augmentation_string(self.image_augmentations)
 
         if not self.experiment_name:
             self.experiment_name = self._generate_experiment_name()
@@ -147,39 +155,36 @@ class ExperimentConfig:
         }
 
 
-def parse_augmentation_string(aug_string: str) -> Dict[str, Any]:
-    """Parse image augmentation string into parameters"""
-    import re
+def parse_augmentation_string(aug_input: Any) -> Dict[str, Any]:
+    """Normalize augmentation params into a validated parameter dictionary."""
+    aug_params = DEFAULT_AUGMENTATION_PARAMS.copy()
 
-    aug_params = {
-        'rotation': 15,
-        'horizontal_flip': True,
-        'random_crop': True,
-        'color_jitter': True,
-        'brightness': 0.2,
-        'contrast': 0.2,
-        'imagenet_norm': True
-    }
+    if aug_input is None:
+        return aug_params
 
-    if 'rotation' in aug_string:
-        rotation_match = re.search(r'rotation \(±(\d+)°\)', aug_string)
-        if rotation_match:
-            aug_params['rotation'] = int(rotation_match.group(1))
+    if isinstance(aug_input, str):
+        try:
+            parsed = ast.literal_eval(aug_input)
+        except (ValueError, SyntaxError) as exc:
+            raise ValueError(
+                "image_augmentations must be a dict (or a dict-like string), "
+                "not a free-form text description."
+            ) from exc
+        aug_input = parsed
 
-    if 'brightness±' in aug_string:
-        brightness_match = re.search(r'brightness±([\d.]+)', aug_string)
-        if brightness_match:
-            aug_params['brightness'] = float(brightness_match.group(1))
+    if not isinstance(aug_input, dict):
+        raise ValueError("image_augmentations must be a dictionary of augmentation params.")
 
-    if 'contrast±' in aug_string:
-        contrast_match = re.search(r'contrast±([\d.]+)', aug_string)
-        if contrast_match:
-            aug_params['contrast'] = float(contrast_match.group(1))
+    aug_params.update(aug_input)
 
-    aug_params['horizontal_flip'] = 'horizontal flip' in aug_string
-    aug_params['random_crop'] = 'random crop' in aug_string
-    aug_params['color_jitter'] = 'color jitter' in aug_string
-    aug_params['imagenet_norm'] = 'ImageNet normalization' in aug_string
+    # Enforce expected types
+    aug_params["rotation"] = int(aug_params["rotation"])
+    aug_params["horizontal_flip"] = bool(aug_params["horizontal_flip"])
+    aug_params["random_crop"] = bool(aug_params["random_crop"])
+    aug_params["color_jitter"] = bool(aug_params["color_jitter"])
+    aug_params["brightness"] = float(aug_params["brightness"])
+    aug_params["contrast"] = float(aug_params["contrast"])
+    aug_params["imagenet_norm"] = bool(aug_params["imagenet_norm"])
 
     return aug_params
 
