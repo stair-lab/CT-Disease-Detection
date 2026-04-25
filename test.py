@@ -22,7 +22,7 @@ from test_dataset import TestDataset
 from model.model_factory import ModelFactory
 from model.flexible_multitask_head import FlexibleMetricsCalculator
 from config.biomarker_config import FlexibleBiomarkerConfig
-from config.experiment_config import ExperimentConfig
+from config.experiment_config import ExperimentConfig, DEFAULT_AUGMENTATIONS
 from sklearn.metrics import roc_auc_score, average_precision_score, mean_absolute_error, mean_squared_error, r2_score
 from sklearn.exceptions import UndefinedMetricWarning
 import warnings
@@ -289,7 +289,7 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         weight_decay=config_dict.get('weight_decay', 1e-5),
         optimizer=config_dict.get('optimizer', 'AdamW'),
         scheduler=config_dict.get('scheduler', 'CosineAnnealing'),
-        image_augmentations=config_dict.get('image_augmentations', 'rotation (±15°), horizontal flip, random crop, color jitter (brightness±0.2, contrast±0.2), ImageNet normalization'),
+        image_augmentations=config_dict.get('image_augmentations', DEFAULT_AUGMENTATIONS.copy()),
         dropout=config_dict.get('dropout', 0.1),
         loss_specific_params=config_dict.get('loss_specific_params', 'class_weights=inverse_frequency'),
         multi_target_strategy=config_dict.get('multi_target_strategy', 'Shared backbone + task-specific heads'),
