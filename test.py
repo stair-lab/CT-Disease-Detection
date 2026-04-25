@@ -6,19 +6,15 @@ Supports any biomarker configuration and model architecture
 import os
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchvision import transforms
-from PIL import Image
-import pandas as pd
 from argparse import ArgumentParser
 from tqdm import tqdm
 import numpy as np
 import json
-import yaml
 from typing import Dict, Any, List, Tuple
 
-from dataset import ClassifierDataset
-from test_dataset import TestDataset
+from dataset import ClassifierDataset, PredictionDataset
 from model.model_factory import ModelFactory
 from model.flexible_multitask_head import FlexibleMetricsCalculator
 from config.biomarker_config import FlexibleBiomarkerConfig
@@ -28,214 +24,21 @@ from sklearn.exceptions import UndefinedMetricWarning
 import warnings
 warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
+try:
+    from safetensors.torch import load_file as safetensors_load_file
+except ImportError:
+    safetensors_load_file = None
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-class CustomCSVDataset(Dataset):
-    """Custom dataset that can load any CSV file"""
-    
-    def __init__(self, data_path, biomarker_config, transforms=None, size=256, csv_file='test.csv'):
-        """
-        Initialize dataset with custom CSV file
-        
-        Args:
-            data_path: Path to data directory
-            biomarker_config: FlexibleBiomarkerConfig object
-            transforms: Image transforms
-            size: Image size
-            csv_file: Name of CSV file to load (e.g., 'test.csv', 'val.csv', 'train.csv')
-        """
-        if not os.path.exists(data_path):
-            raise IOError(f'Path given for CustomCSVDataset {data_path} does not exist...')
-        
-        self.data_path = data_path
-        self.size = size
-        self.biomarker_config = biomarker_config
-        self.transforms = transforms
-        
-        # Load the specified CSV file
-        csv_path = os.path.join(data_path, csv_file)
-        if not os.path.exists(csv_path):
-            raise IOError(f'CSV file {csv_path} does not exist...')
-        
-        self.df = pd.read_csv(csv_path)
-        print(f"Loaded {len(self.df)} samples from {csv_file}")
-        
-        # Handle RAF column if it doesn't exist
-        if 'RAF' not in self.df.columns:
-            self.df['RAF'] = 0
-        
-        # Apply age filtering for HIPAA compliance (only if AGE is a biomarker being tested)
-        self.df = self._filter_age_records()
-        
-        # Get tensor layout for efficient indexing
-        self.tensor_layout = self.biomarker_config.get_tensor_layout()
-        
-        # Pre-compute all target tensors for efficient access
-        self.targets = self._prepare_all_targets()
-        
-        print(f"Biomarkers configured: {self.biomarker_config.get_all_biomarker_names()}")
-        print(f"Total output tensor size: {self.biomarker_config.total_output_size}")
-
-    def _filter_age_records(self):
-        """Filter out records with AGE = "90+" for HIPAA compliance (only if AGE is a biomarker being tested)"""
-        
-        # Check if AGE is actually a biomarker being tested
-        age_is_biomarker = any(
-            biomarker.name == 'AGE' 
-            for biomarker in (self.biomarker_config.binary_biomarkers + 
-                            self.biomarker_config.multiclass_biomarkers + 
-                            self.biomarker_config.continuous_biomarkers)
-        )
-        
-        if not age_is_biomarker:
-            print("ℹ️  AGE is not a biomarker being tested - skipping age filtering")
-            return self.df
-        
-        if 'AGE' not in self.df.columns:
-            print("⚠️  AGE column not found - skipping age filtering")
-            return self.df
-        
-        original_count = len(self.df)
-        
-        age_90_plus_mask = self.df['AGE'] == '90+'
-        age_90_plus_count = age_90_plus_mask.sum()
-        
-        if age_90_plus_count > 0:
-            print(f"🔒 HIPAA Compliance: Filtering out {age_90_plus_count:,} records with AGE='90+'")
-            self.df = self.df[~age_90_plus_mask].copy()
-        
-        numeric_age_mask = pd.to_numeric(self.df['AGE'], errors='coerce').notna()
-        if not numeric_age_mask.all():
-            non_numeric_count = (~numeric_age_mask).sum()
-            print(f"⚠️  Found {non_numeric_count} non-numeric AGE values, filtering them out")
-            self.df = self.df[numeric_age_mask].copy()
-        
-        self.df['AGE'] = pd.to_numeric(self.df['AGE'], errors='coerce')
-        
-        if len(self.df) > 0:
-            max_age = self.df['AGE'].max()
-            min_age = self.df['AGE'].min()
-            
-            if max_age > 89:
-                print(f"⚠️  Warning: Maximum age is {max_age}, expected <= 89")
-            else:
-                print(f"✅ Age range after filtering: {min_age:.0f} - {max_age:.0f} years")
-        
-        filtered_count = len(self.df)
-        removed_count = original_count - filtered_count
-        
-        if removed_count > 0:
-            print(f"📊 Dataset filtering summary:")
-            print(f"   Original records: {original_count:,}")
-            print(f"   Removed records: {removed_count:,}")
-            print(f"   Remaining records: {filtered_count:,}")
-            print(f"   Removal rate: {removed_count/original_count*100:.1f}%")
-        
-        return self.df
-
-    def _prepare_all_targets(self):
-        """Pre-compute all target tensors for the dataset"""
-        import numpy as np
-        
-        targets = []
-        for idx in range(len(self.df)):
-            data = self.df.iloc[idx]
-            
-            # Create tensor with the configured size
-            t = torch.zeros(self.biomarker_config.total_output_size, dtype=torch.float32)
-            
-            # Process binary biomarkers
-            for biomarker in self.biomarker_config.binary_biomarkers:
-                if biomarker.name in data:
-                    layout = self.tensor_layout[biomarker.name]
-                    idx_start = layout.start_idx
-                    
-                    # Convert using configured classes or default Condition enum
-                    if biomarker.positive_class == "PRESENT" and biomarker.negative_class == "ABSENT":
-                        # Use default Condition converter
-                        from utils.labels import Condition
-                        t[idx_start] = Condition.convert(data[biomarker.name])
-                    else:
-                        # Use custom class mapping
-                        if data[biomarker.name] == biomarker.positive_class:
-                            t[idx_start] = 1.0
-                        elif data[biomarker.name] == biomarker.negative_class:
-                            t[idx_start] = 0.0
-                        else:
-                            # Default to negative class for unknown values
-                            t[idx_start] = 0.0
-            
-            # Process multiclass biomarkers
-            for biomarker in self.biomarker_config.multiclass_biomarkers:
-                if biomarker.name in data:
-                    layout = self.tensor_layout[biomarker.name]
-                    idx_start = layout.start_idx
-                    idx_end = layout.end_idx
-                    
-                    # One-hot encoding
-                    if data[biomarker.name] in biomarker.classes:
-                        class_idx = biomarker.classes.index(data[biomarker.name])
-                        t[idx_start + class_idx] = 1.0
-            
-            # Process continuous biomarkers
-            for biomarker in self.biomarker_config.continuous_biomarkers:
-                if biomarker.name in data:
-                    layout = self.tensor_layout[biomarker.name]
-                    idx_start = layout.start_idx
-                    
-                    # Normalize the continuous value
-                    raw_value = float(data[biomarker.name])
-                    normalized_value = biomarker.normalize(raw_value)
-                    t[idx_start] = normalized_value
-            
-            targets.append(t.numpy())
-        
-        return np.array(targets)
-
-    def __len__(self):
-        """Get length of dataset"""
-        return self.df.shape[0]
-
-    def __getitem__(self, idx):
-        """Get data at a certain index"""
-        data = self.df.iloc[idx]
-        
-        # Get pre-computed targets
-        t = torch.tensor(self.targets[idx], dtype=torch.float32)
-        
-        # Load and process image
-        xray = Image.open(os.path.join(self.data_path, 'data', data['FILE'] + '.png'))
-        xray = xray.resize((self.size, self.size), Image.LANCZOS)
-        xray = xray.convert('L')
-        if self.transforms:
-            xray = self.transforms(xray)
-        
-        return xray, t
-
-    def at(self, idx):
-        """Get directory name for a certain index"""
-        return self.df.iloc[idx]['FILE'].split('.')[0]
-
-    @property
-    def filtering_summary(self):
-        """Return a summary of filtering applied"""
-        # Check if AGE is actually a biomarker being tested
-        age_is_biomarker = any(
-            biomarker.name == 'AGE' 
-            for biomarker in (self.biomarker_config.binary_biomarkers + 
-                            self.biomarker_config.multiclass_biomarkers + 
-                            self.biomarker_config.continuous_biomarkers)
-        )
-        
-        if age_is_biomarker:
-            return "Age filtering applied (90+ records removed for HIPAA compliance)"
-        else:
-            return "No age filtering applied (AGE not being tested)"
 
 def arg_parse():
     parser = ArgumentParser(description='Flexible Multi-Task Testing')
     parser.add_argument('--data_dir', required=True, help='Directory with test data')
-    parser.add_argument('--checkpoint_path', required=True, help='Path to best_checkpoint.pth file')
+    parser.add_argument(
+        '--checkpoint_path',
+        required=True,
+        help='Path to model checkpoint (.pth/.pt or .safetensors).'
+    )
     parser.add_argument('--biomarker_config', required=True, help='Path to biomarker configuration file (YAML or JSON)')
     parser.add_argument('--output_dir', default='test_results', help='Output directory for results')
     parser.add_argument('--size', default=256, type=int, help='Image size')
@@ -247,38 +50,122 @@ def arg_parse():
                        help='Use validation set for threshold optimization (default: use same data_dir)')
     parser.add_argument('--val_data_dir', help='Path to validation data directory (if different from data_dir)')
     parser.add_argument('--test_csv', default='test.csv', help='CSV file to use for testing (default: test.csv)')
+    parser.add_argument(
+        '--legacy_checkpoint_compat',
+        action='store_true',
+        help='Enable compatibility loading for older checkpoint key layouts.'
+    )
     return parser.parse_args()
 
-def load_checkpoint(checkpoint_path: str) -> Dict[str, Any]:
-    """Load checkpoint with the new format"""
+def load_checkpoint(checkpoint_path: str, legacy_compat: bool = False) -> Dict[str, Any]:
+    """Load checkpoint in current format, optionally with legacy compatibility."""
     if not os.path.exists(checkpoint_path):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
+
     print(f"Loading checkpoint from: {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-    
-    # Handle both old and new checkpoint formats
-    if 'model_state_dict' in checkpoint:
-        # New format
-        return checkpoint
+    checkpoint_ext = os.path.splitext(checkpoint_path)[1].lower()
+
+    if checkpoint_ext == ".safetensors":
+        if safetensors_load_file is None:
+            raise ImportError(
+                "safetensors is required to load .safetensors checkpoints. "
+                "Install with: pip install safetensors"
+            )
+
+        model_state_dict = safetensors_load_file(checkpoint_path, device="cpu")
+        checkpoint_dir = os.path.dirname(checkpoint_path)
+        config_path = os.path.join(checkpoint_dir, "config.json")
+        thresholds_path = os.path.join(checkpoint_dir, "optimal_thresholds.json")
+
+        config = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                config = json.load(f)
+        else:
+            print(f"Warning: no config.json found next to safetensors file: {config_path}")
+
+        optimal_thresholds = {}
+        if os.path.exists(thresholds_path):
+            with open(thresholds_path, "r") as f:
+                optimal_thresholds = json.load(f)
+
+        checkpoint = {
+            "model_state_dict": model_state_dict,
+            "config": config,
+            "optimal_thresholds": optimal_thresholds,
+        }
     else:
-        # Old format - convert
-        return {
-            'model_state_dict': checkpoint['state_dict'],
-            'config': checkpoint.get('config', {}),
-            'biomarker_config': checkpoint.get('biomarker_config', ''),
-            'epoch': checkpoint.get('epoch', 0),
-            'val_metrics': checkpoint.get('val_metrics', {})
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+    if legacy_compat and "model_state_dict" not in checkpoint and "state_dict" in checkpoint:
+        checkpoint = {
+            "model_state_dict": checkpoint["state_dict"],
+            "config": checkpoint.get("config", {}),
+            "epoch": checkpoint.get("epoch", 0),
+            "val_metrics": checkpoint.get("val_metrics", {}),
         }
 
-def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: FlexibleBiomarkerConfig) -> torch.nn.Module:
-    """Create model architecture from checkpoint configuration"""
-    
-    # Get model configuration
-    config_dict = checkpoint.get('config', {})
-    if not config_dict:
-        raise ValueError("No configuration found in checkpoint. Please use a checkpoint from the new training system.")
-    
+    required_keys = ["model_state_dict", "config"]
+    missing = [k for k in required_keys if k not in checkpoint]
+    if missing:
+        raise ValueError(
+            f"Checkpoint is missing required keys: {missing}. "
+            "Please use a checkpoint produced by the current train.py pipeline."
+        )
+
+    return checkpoint
+
+
+def _remap_legacy_state_dict_keys(state_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply lightweight key remapping for common legacy checkpoint layouts."""
+    remapped = {}
+    for key, value in state_dict.items():
+        new_key = key
+        if new_key.startswith("module."):
+            new_key = new_key[len("module."):]
+        if new_key.startswith("resnet34.fc."):
+            new_key = "fc." + new_key[len("resnet34.fc."):]
+        elif new_key.startswith("resnet18.fc."):
+            new_key = "fc." + new_key[len("resnet18.fc."):]
+        elif new_key.startswith("resnet50.fc."):
+            new_key = "fc." + new_key[len("resnet50.fc."):]
+        remapped[new_key] = value
+    return remapped
+
+
+def _materialize_lazy_modules_from_state_dict(
+    model: torch.nn.Module,
+    state_dict: Dict[str, Any],
+    dropout: float,
+) -> None:
+    """
+    Materialize lazily-created modules (e.g., flattened_processor) before load_state_dict.
+    """
+    weight_key = "classifier.feature_extractor.flattened_processor.0.weight"
+    if (
+        weight_key in state_dict
+        and hasattr(model, "classifier")
+        and hasattr(model.classifier, "feature_extractor")
+        and not hasattr(model.classifier.feature_extractor, "flattened_processor")
+    ):
+        linear_weight = state_dict[weight_key]
+        out_dim, in_dim = linear_weight.shape
+        model.classifier.feature_extractor.flattened_processor = torch.nn.Sequential(
+            torch.nn.Linear(in_dim, out_dim),
+            torch.nn.ReLU(inplace=True),
+            torch.nn.Dropout(dropout),
+            torch.nn.LayerNorm(out_dim),
+        )
+
+
+def create_model_from_checkpoint(
+    checkpoint: Dict[str, Any],
+    biomarker_config: FlexibleBiomarkerConfig,
+    legacy_compat: bool = False
+) -> Tuple[torch.nn.Module, ExperimentConfig]:
+    """Create model + config from checkpoint."""
+    config_dict = checkpoint["config"]
+
     # Create experiment config with all required parameters
     config = ExperimentConfig(
         model=config_dict.get('model', 'ResNet-18'),
@@ -302,93 +189,19 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         sampling_strategy=config_dict.get('sampling_strategy', 'balanced_batch'),
         threshold_selection=config_dict.get('threshold_selection', 'F1_optimal')
     )
-    
-    # Extract single_target_strategy from checkpoint
     single_target_strategy = config_dict.get('single_target_strategy', '')
 
-    # Debug: Print checkpoint configuration
-    print(f"🔍 Checkpoint config: {config_dict}")
-
-    # Auto-detect strategy based on state_dict keys if needed
-    state_dict_keys = list(checkpoint['model_state_dict'].keys())
-    print(f"🔍 State dict keys (first 10): {state_dict_keys[:10]}")
-    print(f"🔍 State dict keys with 'fc': {[k for k in state_dict_keys if 'fc' in k]}")
-
-    has_feature_extractor = any('feature_extractor' in key for key in state_dict_keys)
-    has_flattened_processor = any('flattened_processor' in key for key in state_dict_keys)
-    has_feature_processor = any('feature_processor' in key for key in state_dict_keys)
-    has_nested_resnet = any('resnet34.fc' in key for key in state_dict_keys)  # Custom ResNet34
-    has_nested_resnet18 = any('resnet18.fc' in key for key in state_dict_keys)  # Custom ResNet18
-    has_nested_resnet50 = any('resnet50.fc' in key for key in state_dict_keys)  # Custom ResNet50
-    # Detect ViT checkpoints (timm DINOv2)
-    is_vit = any(any(tok in k for tok in ['cls_token', 'pos_embed', 'patch_embed', 'blocks']) for k in state_dict_keys) or \
-             ('vit' in config.model.lower() or 'dino' in config.model.lower())
-    
-    # Detect Swin Transformer models - they also use CLS token classification and need similar handling
-    is_swin = 'swin' in config.model.lower() or any('swin' in k.lower() for k in state_dict_keys[:5])
-    
-    print(f"   ViT detection: {is_vit}")
-    print(f"   Swin detection: {is_swin}")
-
-    # Debug: Print detection results
-    print(f"   Detection results: feature_extractor={has_feature_extractor}, flattened_processor={has_flattened_processor}, feature_processor={has_feature_processor}")
-    print(f"   Nested ResNet detection: resnet34={has_nested_resnet}, resnet18={has_nested_resnet18}, resnet50={has_nested_resnet50}")
-
-    detected_strategy = None
-    if has_feature_extractor:
-        if has_flattened_processor:
-            # Model was trained with Direct classification head that adapted to flattened input
-            detected_strategy = "Direct classification head"
-        elif has_feature_processor and any('LayerNorm' in key or 'layer_norm' in key for key in state_dict_keys):
-            # Model was trained with CLS token classification (uses LayerNorm)
-            detected_strategy = "CLS token classification"
-        elif has_feature_processor:
-            # Model was trained with Direct classification head (uses BatchNorm)
-            detected_strategy = "Direct classification head"
-    elif has_nested_resnet or has_nested_resnet18 or has_nested_resnet50:
-        # Custom ResNet with nested structure
-        if has_nested_resnet:
-            print(f"⚠️  Detected custom ResNet34 with nested structure (keys contain 'resnet34.fc')")
-        elif has_nested_resnet18:
-            print(f"⚠️  Detected custom ResNet18 with nested structure (keys contain 'resnet18.fc')")
-        elif has_nested_resnet50:
-            print(f"⚠️  Detected custom ResNet50 with nested structure (keys contain 'resnet50.fc')")
-        detected_strategy = "Direct classification head"  # Most likely
-
-    # Swin models with CLS token classification should skip head alignment like ViT
-    # Check if single_target_strategy is CLS token classification
-    uses_cls_token_strategy = (single_target_strategy == "CLS token classification" or 
-                              (detected_strategy == "CLS token classification" if detected_strategy else False))
-    
-    # Treat Swin with CLS token strategy like ViT for head alignment purposes
-    skip_head_alignment = is_vit or (is_swin and uses_cls_token_strategy)
-    
-    print(f"   Uses CLS token strategy: {uses_cls_token_strategy}")
-    print(f"   Skip head alignment: {skip_head_alignment}")
-
-    if detected_strategy and single_target_strategy != detected_strategy:
-        print(f"⚠️  Auto-detected strategy mismatch: config says '{single_target_strategy}' but state_dict suggests '{detected_strategy}'")
-        print(f"   State dict keys suggest: feature_extractor={has_feature_extractor}, flattened_processor={has_flattened_processor}, feature_processor={has_feature_processor}, nested_resnet34={has_nested_resnet}, nested_resnet18={has_nested_resnet18}, nested_resnet50={has_nested_resnet50}")
-        if not skip_head_alignment:
-            single_target_strategy = detected_strategy
-        else:
-            print(f"   ⏭️  Keeping {'ViT/Swin' if is_swin else 'ViT'} single-target strategy from checkpoint (do not override)")
-    
     print(f"Creating model: {config.model}")
     print(f"Fine-tuning strategy: {config.fine_tuning_strategy}")
     if single_target_strategy:
         print(f"Single-target strategy: {single_target_strategy}")
-    
-    # Infer expected head input dim from checkpoint task head weights (if present)
+
+    # Align optional target feature dimension with saved task head input if present.
     expected_head_dim = None
-    try:
-        for k in state_dict_keys:
-            if ('.task_heads.' in k) and k.endswith('.weight'):
-                expected_head_dim = checkpoint['model_state_dict'][k].shape[1]
-                print(f"   Inferred expected head input dim from '{k}': {expected_head_dim}")
-                break
-    except Exception as _e:
-        print(f"   ⚠️  Could not infer expected head dim: {_e}")
+    for key, tensor in checkpoint['model_state_dict'].items():
+        if '.task_heads.' in key and key.endswith('.weight'):
+            expected_head_dim = tensor.shape[1]
+            break
 
     # Create model using ModelFactory
     model = ModelFactory.create_model(
@@ -398,270 +211,34 @@ def create_model_from_checkpoint(checkpoint: Dict[str, Any], biomarker_config: F
         fine_tuning_strategy=config.fine_tuning_strategy,
         dropout=config.dropout,
         biomarker_config=biomarker_config,
-        single_target_strategy=single_target_strategy,  # Use the extracted strategy
-        # Pass through inferred target feature dim for head alignment
-        single_target_output_dim=(None if skip_head_alignment else expected_head_dim)
+        single_target_strategy=single_target_strategy,
+        single_target_output_dim=expected_head_dim
     )
-    
-    # Handle dynamic layer creation for DirectClassificationHeadExtractor
-    print(f"   Debug: has_feature_processor={has_feature_processor}, has_flattened_processor={has_flattened_processor}")
-    print(f"   Debug: hasattr(model, 'fc')={hasattr(model, 'fc') if 'model' in locals() else 'model not created yet'}")
 
-    # Check if model has fc attribute (standard ResNet) or classifier attribute (custom models)
-    has_fc = hasattr(model, 'fc') if 'model' in locals() else False
-    has_classifier = hasattr(model, 'classifier') if 'model' in locals() else False
+    state_dict_to_load = checkpoint['model_state_dict']
+    if legacy_compat:
+        state_dict_to_load = _remap_legacy_state_dict_keys(state_dict_to_load)
 
-    print(f"   Debug: model has fc={has_fc}, classifier={has_classifier}")
+    _materialize_lazy_modules_from_state_dict(
+        model=model,
+        state_dict=state_dict_to_load,
+        dropout=config.dropout,
+    )
 
-    # If single-target strategy is direct head, align feature extractor output dim to checkpoint head dim
-    # For ViT and Swin models with CLS token strategy, skip this alignment to preserve the exact training-time head wiring
-    try:
-        if skip_head_alignment:
-            raise Exception(f"Skip head alignment for {'ViT/Swin' if is_swin else 'ViT'}")
-        # Find any task head weight in checkpoint to infer expected feature dim
-        head_weight_key = None
-        for k in state_dict_keys:
-            if k.endswith('.task_heads.binary_MORTALITY.weight') or ('.task_heads.binary_' in k and k.endswith('.weight')) or \
-               ('.task_heads.continuous_' in k and k.endswith('.weight')) or \
-               ('.task_heads.multiclass_' in k and k.endswith('.weight')):
-                head_weight_key = k
-                break
-        if head_weight_key is not None:
-            expected_head_in = checkpoint['model_state_dict'][head_weight_key].shape[1]
-            # Determine current base dim from backbone
-            if has_fc and hasattr(model.fc, 'in_features'):
-                base_dim = model.fc.in_features
-                target_extractor_parent = model.fc
-                extractor_prefix = 'fc'
-            elif has_classifier and hasattr(model.classifier, 'in_features'):
-                base_dim = model.classifier.in_features
-                target_extractor_parent = model.classifier
-                extractor_prefix = 'classifier'
-            elif hasattr(model, 'head') and hasattr(model, 'num_features'):
-                # ViT-style models: use model.head and model.num_features
-                base_dim = model.num_features
-                target_extractor_parent = model.head
-                extractor_prefix = 'head'
-            else:
-                base_dim = None
-                target_extractor_parent = None
-                extractor_prefix = ''
+    missing_keys, unexpected_keys = model.load_state_dict(state_dict_to_load, strict=False)
+    if missing_keys or unexpected_keys:
+        print("State dict loading warnings:")
+        if missing_keys:
+            print(f"  Missing keys: {missing_keys[:5]}{'...' if len(missing_keys) > 5 else ''}")
+        if unexpected_keys:
+            print(f"  Unexpected keys: {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}")
+        print("Model loaded successfully despite key mismatches")
+    else:
+        print("Model state dict loaded perfectly!")
 
-            if base_dim is not None and target_extractor_parent is not None:
-                print(f"   Head alignment: base_dim={base_dim}, expected_head_in={expected_head_in}")
-                # Create or reuse a proper FeatureExtractor, not a bare nn.Module
-                import torch.nn as nn
-                from model.single_target_strategies import (
-                    DirectClassificationHeadExtractor,
-                    CLSTokenClassificationExtractor
-                )
-                # Prefer CLS extractor for ViT-style models; otherwise direct head
-                if hasattr(model, 'num_features') and hasattr(model, 'forward_head'):
-                    extractor = CLSTokenClassificationExtractor(feature_dim=expected_head_in, dropout=0.1)
-                else:
-                    extractor = DirectClassificationHeadExtractor(input_dim=base_dim, feature_dim=expected_head_in, dropout=0.1)
-                extractor = extractor.to(device)
-                target_extractor_parent.feature_extractor = extractor
-                # Ensure both processors exist and match dims for state_dict loading
-                target_extractor_parent.feature_extractor.feature_processor = nn.Sequential(
-                    nn.Linear(base_dim if hasattr(model, 'forward_head') is False else expected_head_in, expected_head_in),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(0.1),
-                    nn.BatchNorm1d(expected_head_in)
-                ).to(device)
-                target_extractor_parent.feature_extractor.flattened_processor = nn.Sequential(
-                    nn.Linear(expected_head_in, expected_head_in),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(0.1),
-                    nn.LayerNorm(expected_head_in)
-                ).to(device)
-                print(f"   Ensured feature_extractor with processors is created for expected dim {expected_head_in}")
-                # Also ensure task head module exists and matches names (no structural change here)
-        else:
-            print("   No task head weight key found to infer expected head dim")
-    except Exception as _e:
-        print(f"   ⚠️  Head alignment step skipped due to error: {_e}")
-
-    # Pre-create processors and remap keys for non-ViT models only
-    if (not is_vit) and has_feature_processor and has_flattened_processor and (has_fc or has_classifier or hasattr(model, 'head')):
-        print("🔧 Pre-creating both feature_processor and flattened_processor to match saved state dict...")
-        print("   ✅ Dual processor creation logic triggered!")
-
-        # Find feature_processor keys to understand its structure
-        feature_processor_keys = [k for k in state_dict_keys if 'feature_processor' in k and '.weight' in k]
-        flattened_processor_keys = [k for k in state_dict_keys if 'flattened_processor' in k and '.weight' in k]
-
-        print(f"   Found feature_processor keys: {[k for k in feature_processor_keys]}")
-        print(f"   Found flattened_processor keys: {[k for k in flattened_processor_keys]}")
-
-        if feature_processor_keys and flattened_processor_keys:
-            import torch.nn as nn
-
-            # Extract dimensions from the first layer of each processor
-            # Feature processor layer 1 (Linear)
-            fp_layer1_key = [k for k in feature_processor_keys if '.1.weight' in k][0]
-            fp_weight_tensor = checkpoint['model_state_dict'][fp_layer1_key]
-            fp_input_dim = fp_weight_tensor.shape[1]
-            fp_output_dim = fp_weight_tensor.shape[0]
-
-            # Flattened processor layer 0 (Linear)
-            flp_layer0_key = [k for k in flattened_processor_keys if '.0.weight' in k][0]
-            flp_weight_tensor = checkpoint['model_state_dict'][flp_layer0_key]
-            flp_input_dim = flp_weight_tensor.shape[1]
-            flp_output_dim = flp_weight_tensor.shape[0]
-
-            print(f"   Feature processor: {fp_input_dim} -> {fp_output_dim}")
-            print(f"   Flattened processor: {flp_input_dim} -> {flp_output_dim}")
-
-            # Create the processors on the correct attribute (fc or classifier)
-            if has_fc:
-                # Standard ResNet has fc attribute
-                target_extractor = model.fc.feature_extractor
-            else:
-                # Custom models have classifier attribute
-                target_extractor = model.classifier.feature_extractor
-
-            # Create the feature processor (Linear -> ReLU -> Dropout -> BatchNorm)
-            target_extractor.feature_processor = nn.Sequential(
-                nn.Linear(fp_input_dim, fp_output_dim),
-                nn.ReLU(inplace=True),
-                nn.Dropout(0.1),
-                nn.BatchNorm1d(fp_output_dim)
-            ).to(device)
-
-            # Create the flattened processor (Linear -> ReLU -> Dropout -> LayerNorm)
-            target_extractor.flattened_processor = nn.Sequential(
-                nn.Linear(flp_input_dim, flp_output_dim),
-                nn.ReLU(inplace=True),
-                nn.Dropout(0.1),
-                nn.LayerNorm(flp_output_dim)
-            ).to(device)
-
-            print("   Created both processors with correct dimensions")
-
-            # Now remap all the keys to match the dynamic layers
-            print("🔧 Remapping processor keys...")
-            state_dict = checkpoint['model_state_dict'].copy()
-            remapped_state_dict = {}
-
-            # Determine the correct prefix based on model structure
-            if has_fc:
-                extractor_prefix = "fc.feature_extractor"
-            elif has_classifier:
-                extractor_prefix = "classifier.feature_extractor"
-            elif hasattr(model, 'head'):
-                extractor_prefix = "head.feature_extractor"
-            else:
-                extractor_prefix = "feature_extractor"
-
-            # Map feature_processor keys
-            for old_key, value in state_dict.items():
-                if 'feature_processor' in old_key:
-                    # Extract layer index and parameter name
-                    parts = old_key.split('.')
-                    if len(parts) >= 3:
-                        layer_idx = parts[-2]  # '1', '4', etc.
-                        param_name = parts[-1]  # 'weight', 'bias', etc.
-                        new_key = f"{extractor_prefix}.feature_processor.{layer_idx}.{param_name}"
-                        remapped_state_dict[new_key] = value
-                        print(f"   Remapped feature: {old_key} -> {new_key}")
-                    else:
-                        remapped_state_dict[old_key] = value
-                elif 'flattened_processor' in old_key:
-                    # Extract layer index and parameter name
-                    parts = old_key.split('.')
-                    if len(parts) >= 3:
-                        layer_idx = parts[-2]  # '0', '3', etc.
-                        param_name = parts[-1]  # 'weight', 'bias'
-                        new_key = f"{extractor_prefix}.flattened_processor.{layer_idx}.{param_name}"
-                        remapped_state_dict[new_key] = value
-                        print(f"   Remapped flattened: {old_key} -> {new_key}")
-                    else:
-                        remapped_state_dict[old_key] = value
-                else:
-                    remapped_state_dict[old_key] = value
-
-            checkpoint = checkpoint.copy()
-            checkpoint['model_state_dict'] = remapped_state_dict
-
-    # Handle custom ResNet nested structures
-    if (has_nested_resnet and config.model == "ResNet-34") or (has_nested_resnet18 and config.model == "ResNet-18") or (has_nested_resnet50 and config.model == "ResNet-50"):
-        if has_nested_resnet and config.model == "ResNet-34":
-            nested_type = "ResNet-34"
-            old_prefix = "resnet34.fc."
-            new_prefix = "fc."
-        elif has_nested_resnet18 and config.model == "ResNet-18":
-            nested_type = "ResNet-18"
-            old_prefix = "resnet18.fc."
-            new_prefix = "fc."
-        elif has_nested_resnet50 and config.model == "ResNet-50":
-            nested_type = "ResNet-50"
-            old_prefix = "resnet50.fc."
-            new_prefix = "fc."
-        else:
-            nested_type = "Unknown"
-            old_prefix = ""
-            new_prefix = ""
-
-        print(f"🔧 Handling custom {nested_type} nested structure...")
-        # The saved model has keys like 'resnetXX.fc.weight' but we expect 'fc.weight'
-        # We'll need to remap these keys during loading
-        state_dict = checkpoint['model_state_dict'].copy()
-
-        # Remap nested keys to standard keys
-        remapped_state_dict = {}
-        for old_key, value in state_dict.items():
-            if old_prefix in old_key:
-                new_key = old_key.replace(old_prefix, new_prefix)
-                remapped_state_dict[new_key] = value
-                print(f"   Remapped: {old_key} -> {new_key}")
-            else:
-                remapped_state_dict[old_key] = value
-
-        checkpoint = checkpoint.copy()
-        checkpoint['model_state_dict'] = remapped_state_dict
-
-    # Try to load the state dict with strict=False to handle mismatches gracefully
-    try:
-        missing_keys, unexpected_keys = model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        if missing_keys or unexpected_keys:
-            print(f"⚠️  State dict loading warnings:")
-            if missing_keys:
-                print(f"  Missing keys: {missing_keys[:5]}{'...' if len(missing_keys) > 5 else ''}")
-            if unexpected_keys:
-                print(f"  Unexpected keys: {unexpected_keys[:5]}{'...' if len(unexpected_keys) > 5 else ''}")
-            print("  ✅ Model loaded successfully despite key mismatches")
-        else:
-            print("✅ Model state dict loaded perfectly!")
-    except Exception as e:
-        print(f"❌ Failed to load state dict even with strict=False: {e}")
-        raise e
     model.to(device)
     model.eval()
-    # ViT head wiring debug
-    try:
-        is_vit = hasattr(model, 'num_features') and hasattr(model, 'head')
-        if is_vit:
-            print("🔍 ViT load debug:")
-            print(f"   num_features={getattr(model, 'num_features', None)}")
-            fx = getattr(model.head, 'feature_extractor', None)
-            print(f"   head.feature_extractor exists={fx is not None}")
-            if fx is not None:
-                fp = getattr(fx, 'feature_processor', None)
-                flp = getattr(fx, 'flattened_processor', None)
-                if isinstance(fp, torch.nn.Sequential) and len(fp) > 0 and hasattr(fp[0], 'in_features'):
-                    print(f"   feature_processor: {fp[0].in_features}->{fp[0].out_features}")
-                if isinstance(flp, torch.nn.Sequential) and len(flp) > 0 and hasattr(flp[0], 'in_features'):
-                    print(f"   flattened_processor: {flp[0].in_features}->{flp[0].out_features}")
-            # Show a task head weight shape from checkpoint for alignment reference
-            head_key = next((k for k in state_dict_keys if '.task_heads.' in k and k.endswith('.weight')), None)
-            if head_key:
-                shp = tuple(checkpoint['model_state_dict'][head_key].shape)
-                print(f"   checkpoint task head weight shape: {shp}")
-    except Exception as _e:
-        print(f"⚠️  ViT debug skipped: {_e}")
-    
-    # Log model info
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model loaded successfully!")
@@ -677,7 +254,7 @@ def create_test_transforms(config: ExperimentConfig) -> transforms.Compose:
     from config.experiment_config import parse_augmentation_string
     aug_params = parse_augmentation_string(config.image_augmentations)
     
-    print(f"🔍 Test preprocessing settings:")
+    print(f"Test preprocessing settings:")
     print(f"   Pretrained weights: {config.pretrained_weights}")
     print(f"   ImageNet normalization: {aug_params['imagenet_norm']}")
     print(f"   Image augmentations: {config.image_augmentations}")
@@ -708,9 +285,9 @@ def create_test_transforms(config: ExperimentConfig) -> transforms.Compose:
                 mean=[0.55001191, 0.55001191, 0.55001191], 
                 std=[0.18854326, 0.18854326, 0.18854326]
             ))
-        print(f"   ✅ Normalization applied: {config.pretrained_weights} normalization")
+        print(f"Normalization applied: {config.pretrained_weights} normalization")
     else:
-        print(f"   ⚠️  No normalization applied (imagenet_norm=False)")
+        print(f"No normalization applied (imagenet_norm=False)")
     
     return transforms.Compose(transform_list)
 
@@ -724,19 +301,19 @@ def create_test_dataset(data_dir: str, biomarker_config: FlexibleBiomarkerConfig
     
     if only_pred:
         # Test dataset without labels
-        test_dataset = TestDataset(data_dir, transforms=transform, size=size)
+        test_dataset = PredictionDataset(data_dir, transforms=transform, size=size)
         print(f"Created test dataset with {len(test_dataset)} images (prediction only)")
     else:
-        # Create a custom dataset that can handle any CSV file
-        test_dataset = CustomCSVDataset(
+        # Use unified classifier dataset with explicit CSV selection
+        test_dataset = ClassifierDataset(
             data_dir, 
             biomarker_config, 
             transforms=transform, 
             size=size, 
+            train=False,
             csv_file=test_csv
         )
         print(f"Created test dataset with {len(test_dataset)} samples")
-        print(f"Dataset filtering applied: {test_dataset.filtering_summary}")
     
     return DataLoader(
         dataset=test_dataset, 
@@ -1313,10 +890,14 @@ def main():
     biomarker_config.print_summary()
     
     # Load checkpoint
-    checkpoint = load_checkpoint(args.checkpoint_path)
+    checkpoint = load_checkpoint(args.checkpoint_path, legacy_compat=args.legacy_checkpoint_compat)
     
     # Create model and get config
-    model, config = create_model_from_checkpoint(checkpoint, biomarker_config)
+    model, config = create_model_from_checkpoint(
+        checkpoint,
+        biomarker_config,
+        legacy_compat=args.legacy_checkpoint_compat
+    )
     
     # Load optimal thresholds from checkpoint or find them on validation set
     optimal_thresholds = checkpoint.get('optimal_thresholds', {})
