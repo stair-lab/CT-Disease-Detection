@@ -53,7 +53,7 @@ class ClassifierDataset(Dataset):
         Also ensures that remaining records have max age of 89.
         """
         if 'AGE' not in self.df.columns:
-            print("⚠️  AGE column not found - skipping age filtering")
+            print("AGE column not found - skipping age filtering")
             return self.df
         
         original_count = len(self.df)
@@ -63,7 +63,7 @@ class ClassifierDataset(Dataset):
         age_90_plus_count = age_90_plus_mask.sum()
         
         if age_90_plus_count > 0:
-            print(f"🔒 HIPAA Compliance: Filtering out {age_90_plus_count:,} records with AGE='90+'")
+            print(f"HIPAA Compliance: Filtering out {age_90_plus_count:,} records with AGE='90+'")
             self.df = self.df[~age_90_plus_mask].copy()
         
         # Convert remaining AGE values to numeric and verify max age is 89
@@ -71,7 +71,7 @@ class ClassifierDataset(Dataset):
         if not numeric_age_mask.all():
             # Handle any non-numeric age values (shouldn't happen after filtering 90+)
             non_numeric_count = (~numeric_age_mask).sum()
-            print(f"⚠️  Found {non_numeric_count} non-numeric AGE values, filtering them out")
+            print(f"Found {non_numeric_count} non-numeric AGE values, filtering them out")
             self.df = self.df[numeric_age_mask].copy()
         
         # Convert to numeric and verify max age
@@ -82,19 +82,19 @@ class ClassifierDataset(Dataset):
             min_age = self.df['AGE'].min()
             
             if max_age > 89:
-                print(f"⚠️  Warning: Maximum age is {max_age}, expected <= 89")
+                print(f"Warning: Maximum age is {max_age}, expected <= 89")
             else:
-                print(f"✅ Age range after filtering: {min_age:.0f} - {max_age:.0f} years")
+                print(f"Age range after filtering: {min_age:.0f} - {max_age:.0f} years")
         
         filtered_count = len(self.df)
         removed_count = original_count - filtered_count
         
         if removed_count > 0:
-            print(f"📊 Dataset filtering summary:")
-            print(f"   Original records: {original_count:,}")
-            print(f"   Removed records: {removed_count:,}")
-            print(f"   Remaining records: {filtered_count:,}")
-            print(f"   Removal rate: {removed_count/original_count*100:.1f}%")
+            print(f"Dataset filtering summary:")
+            print(f" Original records: {original_count:,}")
+            print(f" Removed records: {removed_count:,}")
+            print(f" Remaining records: {filtered_count:,}")
+            print(f" Removal rate: {removed_count/original_count*100:.1f}%")
         
         return self.df
 

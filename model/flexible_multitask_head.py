@@ -8,13 +8,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from typing import Dict, List, Tuple, Any, Union, Optional
+import logging
 from config.biomarker_config import FlexibleBiomarkerConfig, TensorLayout
 from .single_target_strategies import (
     SingleTargetStrategy, 
-    FeatureExtractor, 
     create_feature_extractor,
-    get_strategy_from_csv
+    get_strategy_from_name
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FlexibleMultiTaskHead(nn.Module):
@@ -40,7 +42,7 @@ class FlexibleMultiTaskHead(nn.Module):
 
         if single_target_strategy is not None:
             if isinstance(single_target_strategy, str):
-                self.single_target_strategy = get_strategy_from_csv(single_target_strategy)
+                self.single_target_strategy = get_strategy_from_name(single_target_strategy)
             else:
                 self.single_target_strategy = single_target_strategy
 
@@ -157,7 +159,7 @@ class LinearProbeMultiTaskHead(nn.Module):
 
         if single_target_strategy is not None:
             if isinstance(single_target_strategy, str):
-                self.single_target_strategy = get_strategy_from_csv(single_target_strategy)
+                self.single_target_strategy = get_strategy_from_name(single_target_strategy)
             else:
                 self.single_target_strategy = single_target_strategy
 
@@ -474,14 +476,20 @@ class FlexibleMetricsCalculator:
             optimal_thresholds[biomarker.name] = best_threshold
             
             # Log the optimization result
-            print(f"  {biomarker.name}: threshold={best_threshold:.3f}, {self.optimization_metric}={best_score:.3f}")
+            logger.info(
+                "  %s: threshold=%.3f, %s=%.3f",
+                biomarker.name,
+                best_threshold,
+                self.optimization_metric,
+                best_score,
+            )
         
         return optimal_thresholds
     
     def update_optimal_thresholds(self, predictions: torch.Tensor, targets: torch.Tensor):
         """Update optimal thresholds based on current predictions and targets"""
         if self.threshold_optimization:
-            print("🎯 Optimizing thresholds...")
+            logger.info("Optimizing thresholds...")
             self.optimal_thresholds = self.optimize_thresholds(predictions, targets)
         else:
             # Use fallback threshold for all biomarkers
@@ -676,45 +684,3 @@ class FlexibleMetricsCalculator:
         return all_metrics
 
 
-if __name__ == "__main__":
-    # Test the flexible components
-    from config.biomarker_config import FlexibleBiomarkerConfig
-    
-    # Load configuration
-    config = FlexibleBiomarkerConfig('config/biomarker_config_comorbidities.yaml')
-    
-    # Test multi-task head
-    head = FlexibleMultiTaskHead(input_dim=512, biomarker_config=config)
-    
-    # Test input
-    batch_size = 4
-    x = torch.randn(batch_size, 512)
-    output = head(x)
-    
-    print(f"Input shape: {x.shape}")
-    print(f"Output shape: {output.shape}")
-    print(f"Expected output size: {config.total_output_size}")
-    
-    # Test loss function
-    criterion = FlexibleMultiTaskLoss(config)
-    
-    # Create dummy targets
-    targets = torch.randn(batch_size, config.total_output_size)
-    # Make binary targets actually binary
-    for biomarker in config.binary_biomarkers:
-        layout = config.get_tensor_layout()[biomarker.name]
-        targets[:, layout.start_idx] = torch.randint(0, 2, (batch_size,)).float()
-    
-    loss, loss_dict = criterion(output, targets)
-    print(f"Loss: {loss.item():.4f}")
-    print(f"Loss components: {loss_dict}")
-    
-    # Test metrics
-    metrics_calc = FlexibleMetricsCalculator(config)
-    
-    # Apply sigmoid to binary outputs for metrics calculation
-    output_for_metrics = output.clone()
-    metrics = metrics_calc.calculate_all_metrics(output_for_metrics, targets)
-    
-    print(f"Sample metrics: {list(metrics.keys())}")
-    print(f"Average AUROC: {metrics['average_auroc']:.4f}")

@@ -254,7 +254,7 @@ def extract_features_from_model_output(
         raise ValueError(f"Unknown single-target strategy: {strategy}")
 
 
-# Strategy mapping from CSV values to enum values
+# Strategy mapping from config string values to enum values
 STRATEGY_MAPPING = {
     "Direct classification head": SingleTargetStrategy.DIRECT_CLASSIFICATION_HEAD,
     "CLS token classification": SingleTargetStrategy.CLS_TOKEN_CLASSIFICATION,
@@ -262,17 +262,24 @@ STRATEGY_MAPPING = {
 }
 
 
-def get_strategy_from_csv(csv_value: str) -> SingleTargetStrategy:
+def get_strategy_from_name(strategy_name: str) -> SingleTargetStrategy:
     """
-    Convert CSV string value to SingleTargetStrategy enum
+    Convert strategy string value to SingleTargetStrategy enum.
     
     Args:
-        csv_value: Strategy string from CSV file
+        strategy_name: Strategy string from config/checkpoint
         
     Returns:
         SingleTargetStrategy enum value
     """
-    if csv_value not in STRATEGY_MAPPING:
-        raise ValueError(f"Unknown strategy in CSV: {csv_value}. Available: {list(STRATEGY_MAPPING.keys())}")
+    if strategy_name not in STRATEGY_MAPPING:
+        raise ValueError(
+            f"Unknown strategy: {strategy_name}. Available: {list(STRATEGY_MAPPING.keys())}"
+        )
     
-    return STRATEGY_MAPPING[csv_value]
+    return STRATEGY_MAPPING[strategy_name]
+
+
+def get_strategy_from_csv(csv_value: str) -> SingleTargetStrategy:
+    """Backward-compatible alias for older call sites."""
+    return get_strategy_from_name(csv_value)

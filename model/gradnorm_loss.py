@@ -7,12 +7,15 @@ Chen et al., 2018 (https://arxiv.org/abs/1711.02257)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 import numpy as np
 from collections import deque
+import logging
 
 from config.biomarker_config import FlexibleBiomarkerConfig
 from model.flexible_multitask_head import FlexibleMultiTaskLoss
+
+logger = logging.getLogger(__name__)
 
 
 class GradNormLoss(nn.Module):
@@ -175,7 +178,10 @@ class GradNormLoss(nn.Module):
             ], dtype=torch.float32, device=self.task_weights.device)
             
             self.initial_losses_computed = True
-            print(f"GradNorm: Initial task loss averages computed: {dict(zip(self.task_names, self.task_loss_averages.cpu().numpy()))}")
+            logger.info(
+                "GradNorm: Initial task loss averages computed: %s",
+                dict(zip(self.task_names, self.task_loss_averages.cpu().numpy())),
+            )
     
     def _update_task_weights(self, model: nn.Module, task_losses: torch.Tensor):
         """Update task weights using simplified GradNorm algorithm."""
@@ -205,7 +211,11 @@ class GradNormLoss(nn.Module):
         self.loss_ratio_history.append(relative_inverse_training_rates.detach().cpu().numpy().copy())
         
         if len(self.weight_history) % 50 == 0:  # Print every 50 updates
-            print(f"GradNorm Step {self.step_count}: Weights = {dict(zip(self.task_names, self.task_weights.data.cpu().numpy()))}")
+            logger.info(
+                "GradNorm Step %s: Weights = %s",
+                self.step_count,
+                dict(zip(self.task_names, self.task_weights.data.cpu().numpy())),
+            )
     
     def forward(self, predictions: torch.Tensor, targets: torch.Tensor, 
                 model: Optional[nn.Module] = None) -> Tuple[torch.Tensor, Dict[str, float]]:
@@ -307,7 +317,7 @@ class GradNormTrainer:
         """
         return self.gradnorm_loss(predictions, targets, model)
     
-    def get_training_stats(self) -> Dict[str, any]:
+    def get_training_stats(self) -> Dict[str, Any]:
         """Get training statistics for logging."""
         return {
             'task_weights': self.gradnorm_loss.get_task_weights(),
