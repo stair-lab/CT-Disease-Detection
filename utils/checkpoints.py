@@ -1,39 +1,38 @@
 import os
 import shutil
+import logging
 import torch
 
 # Functions in this file are inspired by the following:
 # https://github.com/cs230-stanford/cs230-code-examples/blob/master/pytorch/vision/utils.py
 
+logger = logging.getLogger(__name__)
+
+
 def save_checkpoint(state, model_state, isbest, checkpoint):
     """
-    Saves model and training parameters at checkpoint + 'last.pth.tar'. If is_best==True, also saves
-    checkpoint + 'best.pth.tar'
-    @param state     : contains model's state_dict, may contain other keys such as epoch, optimizer state_dict (dict)
-    @param isbest   : True if it is the best model seen till now (bool)
-    @param checkpoint: folder where parameters are to be saved (string)
+    Save training and model state to a checkpoint directory.
     """
     filepath = os.path.join(checkpoint, 'last.pth')
     model_filepath = os.path.join(checkpoint, 'model_last.pth')
     if not os.path.exists(checkpoint):
-        print("Checkpoint Directory does not exist! Making directory {}".format(checkpoint))
+        logger.info("Checkpoint directory does not exist. Creating %s", checkpoint)
         os.makedirs(checkpoint)
 
     torch.save(state, filepath)
     torch.save(model_state, model_filepath)
     if isbest:
-        print("Saving best path")
+        logger.info("Saving best checkpoint copy")
         shutil.copyfile(filepath, os.path.join(checkpoint, 'best.pth'))
         shutil.copyfile(model_filepath, os.path.join(checkpoint, 'model_best.pth'))
 
 
 def load_checkpoint(checkpoint, model, optimizer=None):
     """
-    Loads model parameters (state_dict) from file_path. If optimizer is provided, loads state_dict of
-    optimizer assuming it is present in checkpoint.
-    @param checkpointdir: directory with checkpoint files (string)
-    @param model        : model for which the parameters are loaded (DeepConvNet)
-    @param optimizer    : resume optimizer from checkpoint (optim)
+    Load checkpoint file into model (and optimizer if provided).
+
+    The key remapping logic below is kept for compatibility with older
+    checkpoint formats used during project development.
     """
     if not os.path.exists(checkpoint):
         raise IOError("File doesn't exist {}".format(checkpoint))
