@@ -5,7 +5,7 @@ Supports dynamic task configuration without hardcoded assumptions
 
 import yaml
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 import pandas as pd
 import numpy as np
@@ -38,6 +38,19 @@ class ContinuousBiomarker:
     min_value: float
     max_value: float
     normalization: str = "min_max"  # "min_max", "z_score", or "none"
+
+    def __post_init__(self):
+        """Validate continuous biomarker configuration."""
+        if self.max_value <= self.min_value:
+            raise ValueError(
+                f"Invalid range for {self.name}: max_value ({self.max_value}) "
+                f"must be greater than min_value ({self.min_value})"
+            )
+        if self.normalization not in {"min_max", "z_score", "none"}:
+            raise ValueError(
+                f"Unsupported normalization '{self.normalization}' for {self.name}. "
+                "Expected one of: min_max, z_score, none."
+            )
     
     def normalize(self, value: float) -> float:
         """Normalize a continuous value based on the configured normalization method"""
@@ -305,15 +318,10 @@ class FlexibleBiomarkerConfig:
                 if pd.isna(value):
                     normalized_value = 0.0  # Default for missing values
                 else:
-                    # Normalize based on specified method
-                    if biomarker.normalization == "min_max":
-                        normalized_value = (float(value) - biomarker.min_value) / (biomarker.max_value - biomarker.min_value)
-                        normalized_value = np.clip(normalized_value, 0.0, 1.0)  # Ensure [0, 1] range
-                    elif biomarker.normalization == "z_score":
-                        # Would need mean/std from training data for proper z-score normalization
-                        normalized_value = float(value)
-                    else:  # no normalization
-                        normalized_value = float(value)
+                    normalized_value = biomarker.normalize(float(value))
+                    if biomarker.normalization in {"min_max", "z_score"}:
+                        # Keep normalized targets bounded for training stability.
+                        normalized_value = float(np.clip(normalized_value, 0.0, 1.0))
                 
                 targets[i, tensor_info.start_idx] = normalized_value
         
@@ -327,12 +335,8 @@ class FlexibleBiomarkerConfig:
         for biomarker in self.continuous_biomarkers:
             tensor_info = layout[biomarker.name]
             normalized_preds = predictions[:, tensor_info.start_idx]
-            
-            if biomarker.normalization == "min_max":
-                original_preds = (normalized_preds * (biomarker.max_value - biomarker.min_value)) + biomarker.min_value
-            else:
-                original_preds = normalized_preds
-            
+
+            original_preds = np.array([biomarker.denormalize(v) for v in normalized_preds], dtype=np.float32)
             denormalized[biomarker.name] = original_preds
         
         return denormalized
@@ -376,7 +380,7 @@ class FlexibleBiomarkerConfig:
         
         if file_path.endswith('.yaml') or file_path.endswith('.yml'):
             with open(file_path, 'w') as f:
-                yaml.dump(config_data, f, default_flow_style=False, indent=2)
+                yaml.safe_dump(config_data, f, default_flow_style=False, sort_keys=False, indent=2)
         elif file_path.endswith('.json'):
             with open(file_path, 'w') as f:
                 json.dump(config_data, f, indent=2)
@@ -411,91 +415,3 @@ class FlexibleBiomarkerConfig:
         for name, info in layout.items():
             print(f"  {name}: indices {info.start_idx}-{info.end_idx-1} (size: {info.size}, type: {info.task_type})")
 
-
-def create_comorbidities_config() -> FlexibleBiomarkerConfig:
-    """Create the comorbidities detection configuration programmatically"""
-    config = FlexibleBiomarkerConfig()
-    
-    config.experiment_name = "comorbidities_detection"
-    config.description = "Multi-task learning for comorbidity detection from CT scans"
-    
-    # Binary biomarkers
-    binary_names = [
-        ("GENDER", "Patient gender (male=1, female=0)", "male"),
-        ("MORTALITY", "Death status", "PRESENT"),
-        ("HCC12", "HCC code 12", "PRESENT"),
-        ("HCC18", "HCC code 18", "PRESENT"),
-        ("HCC19", "HCC code 19", "PRESENT"),
-        ("HCC22", "HCC code 22", "PRESENT"),
-        ("HCC48", "HCC code 48", "PRESENT"),
-        ("HCC85", "HCC code 85", "PRESENT"),
-        ("HCC96", "HCC code 96", "PRESENT"),
-        ("HCC108", "HCC code 108", "PRESENT"),
-        ("HCC111", "HCC code 111", "PRESENT"),
-        ("CALCIUMSCORING_ABDOMINALAGATSTON_BINARY", "High calcium score indicator (>1000)", "PRESENT")
-    ]
-    
-    config.binary_biomarkers = [
-        BinaryBiomarker(name=name, description=desc, positive_class=pos_class)
-        for name, desc, pos_class in binary_names
-    ]
-    
-    # No multiclass biomarkers for this configuration
-    config.multiclass_biomarkers = []
-    
-    # Continuous biomarkers
-    config.continuous_biomarkers = [
-        ContinuousBiomarker(
-            name="AGE",
-            description="Patient age in years",
-            min_value=18,
-            max_value=89,  # Updated for HIPAA compliance after filtering "90+" records
-            normalization="min_max"
-        )
-    ]
-    
-    # Settings
-    config.preprocessing = {
-        "image_size": 256,
-        "normalize_images": True,
-        "convert_to_rgb": True
-    }
-    
-    config.training = {
-        "class_weighting": True,
-        "balanced_sampling": False
-    }
-    
-    config.validation = {
-        "binary_threshold": 0.5,
-        "metrics": ["auroc", "accuracy", "sensitivity", "specificity", "f1_score"],
-        "regression_metrics": ["mse", "mae", "r2_score"]
-    }
-    
-    return config
-
-
-if __name__ == "__main__":
-    # Test the configuration
-    config = create_comorbidities_config()
-    config.print_summary()
-    
-    # Test with sample data
-    sample_data = {
-        'GENDER': ['male', 'female', 'male'],
-        'MORTALITY': ['ABSENT', 'PRESENT', 'ABSENT'],
-        'HCC12': ['ABSENT', 'ABSENT', 'PRESENT'],
-        'AGE': [45, 67, 52]
-    }
-    
-    df = pd.DataFrame(sample_data)
-    
-    # Add missing columns with default values
-    for biomarker in config.binary_biomarkers:
-        if biomarker.name not in df.columns:
-            df[biomarker.name] = 'ABSENT'
-    
-    print(f"\nSample tensor conversion:")
-    targets = config.prepare_targets_tensor(df)
-    print(f"Input shape: {targets.shape}")
-    print(f"Sample targets:\n{targets}")
