@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms
 from sklearn.utils.class_weight import compute_class_weight
-import pandas as pd
 from tqdm import tqdm
 import json
 import time
@@ -29,7 +28,7 @@ from model.flexible_multitask_head import FlexibleMultiTaskLoss, FlexibleMetrics
 from model.gradnorm_loss import GradNormLoss, GradNormTrainer
 from config.biomarker_config import FlexibleBiomarkerConfig
 from config.experiment_config import (
-    ExperimentConfigLoader, ExperimentConfig, 
+    ExperimentConfig, get_model_defaults, DEFAULT_AUGMENTATIONS,
     parse_augmentation_string, create_optimizer, create_scheduler
 )
 from utils.checkpoints import save_checkpoint, load_checkpoint
@@ -746,104 +745,126 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
 
 def main():
     parser = ArgumentParser(description='Flexible Multi-Task Training')
-    parser.add_argument('--config_csv', required=True, help='Path to experiment configuration CSV')
-    parser.add_argument('--data_dir', required=True, help='Path to dataset directory')
-    parser.add_argument('--biomarker_config', required=True, 
-                       help='Path to biomarker configuration file (YAML or JSON)')
-    parser.add_argument('--output_base_dir', default='/lfs/skampere2/0/mahmedc/Comorbidities-Detection/models', 
-                       help='Base directory for model outputs')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
-    parser.add_argument('--model_name', help='Specific model to train')
-    parser.add_argument('--learning_rate', type=float, help='Specific learning rate for this experiment')
-    parser.add_argument('--experiment_name', help='Custom experiment name (overrides auto-generated name)')
-    
-    # GradNorm arguments
-    parser.add_argument('--use_gradnorm', action='store_true', help='Enable GradNorm for loss balancing')
-    parser.add_argument('--gradnorm_alpha', type=float, default=0.16, help='GradNorm restoring force strength')
-    parser.add_argument('--gradnorm_update_freq', type=int, default=10, help='Update GradNorm weights every N iterations')
-    
+
+    # --- Required arguments ---
+    parser.add_argument('--model', required=True,
+                        help='Model architecture to train (e.g. "ResNet-18", "ViT-Small (DINOv2)"). '
+                             'See README for the full list of supported models.')
+    parser.add_argument('--data_dir', required=True,
+                        help='Path to dataset directory. Must contain train.csv, val.csv, and a data/ subfolder with PNG images.')
+    parser.add_argument('--biomarker_config', required=True,
+                        help='Path to biomarker configuration file (YAML or JSON). '
+                             'See config/biomarker_config_multitask_example.yaml for the full multi-task config used in the paper.')
+
+    # --- Output ---
+    parser.add_argument('--output_dir', default='./outputs',
+                        help='Directory to save checkpoints, logs, and TensorBoard (default: ./outputs)')
+    parser.add_argument('--experiment_name',
+                        help='Custom name for this run. Auto-generated from model/lr/batch if not provided.')
+
+    # --- Training hyperparameters (defaults match the published experiments) ---
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='Number of training epochs (default: 100)')
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                        help='Learning rate (default: 1e-4)')
+    parser.add_argument('--batch_size', type=int, default=16,
+                        help='Batch size (default: 16)')
+    parser.add_argument('--weight_decay', type=float, default=1e-4,
+                        help='Weight decay (default: 1e-4)')
+    parser.add_argument('--optimizer', default='AdamW', choices=['AdamW', 'Adam', 'SGD'],
+                        help='Optimizer (default: AdamW)')
+    parser.add_argument('--scheduler', default='CosineAnnealing',
+                        choices=['CosineAnnealing', 'CosineAnnealingWarmRestarts',
+                                 'ReduceLROnPlateau', 'StepLR', 'ExponentialLR'],
+                        help='LR scheduler (default: CosineAnnealing)')
+    parser.add_argument('--dropout', type=float, default=0.2,
+                        help='Dropout rate (default: 0.2)')
+    parser.add_argument('--class_weighting', default='inverse_frequency',
+                        choices=['inverse_frequency', 'none'],
+                        help='Class weighting strategy (default: inverse_frequency)')
+    parser.add_argument('--sampling_strategy', default='balanced_batch',
+                        choices=['balanced_batch', 'random'],
+                        help='Sampling strategy for training DataLoader (default: balanced_batch)')
+    parser.add_argument('--fine_tuning_strategy', default='Full fine-tuning',
+                        choices=['Full fine-tuning', 'linear_probe'],
+                        help='Fine-tuning strategy (default: Full fine-tuning)')
+
+    # --- Per-model defaults (auto-detected from model name if not specified) ---
+    parser.add_argument('--pretrained_weights',
+                        help='Pretrained weights to use. Auto-detected from --model if not provided.')
+    parser.add_argument('--single_target_strategy',
+                        help='Single-target strategy. Auto-detected from --model if not provided.')
+
+    # --- GradNorm ---
+    parser.add_argument('--use_gradnorm', action='store_true',
+                        help='Enable GradNorm adaptive loss balancing')
+    parser.add_argument('--gradnorm_alpha', type=float, default=0.16,
+                        help='GradNorm restoring force strength (default: 0.16)')
+    parser.add_argument('--gradnorm_update_freq', type=int, default=10,
+                        help='Update GradNorm weights every N iterations (default: 10)')
+
     args = parser.parse_args()
-    
+
     # Load biomarker configuration
     print(f"Loading biomarker configuration from: {args.biomarker_config}")
     biomarker_config = FlexibleBiomarkerConfig(args.biomarker_config)
-    
-    print(f"Biomarker configuration loaded:")
+
+    print("Biomarker configuration loaded:")
     biomarker_config.print_summary()
-    
-    # Load experiment configurations
-    config_loader = ExperimentConfigLoader(args.config_csv)
-    
-    if args.model_name:
-        # Train specific model
-        config = config_loader.load_config_by_model(args.model_name)
-        if config is None:
-            print(f"Model {args.model_name} not found in configuration file")
-            return
-        
-        # Override learning rate if specified
-        if args.learning_rate:
-            config.learning_rate = [args.learning_rate]
-        
-        # Override GradNorm settings if specified
-        config.use_gradnorm = args.use_gradnorm
-        config.gradnorm_alpha = args.gradnorm_alpha
-        config.gradnorm_update_freq = args.gradnorm_update_freq
-        
-        configs_to_run = [config]
-    else:
-        # Train all must-include models
-        configs_to_run = config_loader.load_must_include_configs()
-    
-    print(f"Found {len(configs_to_run)} experiments to run")
-    
-    # Run experiments
-    results = []
-    for i, config in enumerate(configs_to_run):
-        print(f"\n{'='*50}")
-        print(f"Running experiment {i+1}/{len(configs_to_run)}: {config.model}")
-        print(f"{'='*50}")
-        
-        # Override experiment name if provided
-        if args.experiment_name:
-            config.experiment_name = args.experiment_name
-        
-        # Create output directory
-        output_dir = os.path.join(args.output_base_dir, config.experiment_name)
-        
-        try:
-            model, best_median_auroc = train_model(
-                config=config,
-                data_dir=args.data_dir,
-                output_dir=output_dir,
-                biomarker_config=biomarker_config,
-                epochs=args.epochs
-            )
-            
-            results.append({
-                'model': config.model,
-                'experiment_name': config.experiment_name,
-                'best_median_auroc': best_median_auroc,
-                'status': 'completed'
-            })
-            
-        except Exception as e:
-            print(f"Error training {config.model}: {str(e)}")
-            results.append({
-                'model': config.model,
-                'experiment_name': config.experiment_name,
-                'best_median_auroc': 0.0,
-                'status': f'failed: {str(e)}'
-            })
-    
-    # Save results summary
-    results_df = pd.DataFrame(results)
-    # results_df.to_csv(os.path.join(args.output_base_dir, 'experiment_results.csv'), index=False)  # Disabled due to bug
-    
+
+    # Resolve per-model defaults for pretrained_weights and single_target_strategy
+    from config.experiment_config import get_model_defaults, DEFAULT_AUGMENTATIONS
+    model_defaults = get_model_defaults(args.model)
+    pretrained_weights = args.pretrained_weights or model_defaults['pretrained_weights']
+    single_target_strategy = args.single_target_strategy or model_defaults['single_target_strategy']
+
+    # Build ExperimentConfig directly from CLI args
+    config = ExperimentConfig(
+        model=args.model,
+        loss_function='CE',
+        must_include=True,
+        learning_rate=[args.learning_rate],
+        batch_size=args.batch_size,
+        weight_decay=args.weight_decay,
+        optimizer=args.optimizer,
+        scheduler=args.scheduler,
+        image_augmentations=DEFAULT_AUGMENTATIONS.copy(),
+        dropout=args.dropout,
+        loss_specific_params='class_weights=inverse_frequency',
+        multi_target_strategy='Shared backbone + task-specific heads',
+        single_target_strategy=single_target_strategy,
+        pretrained_weights=pretrained_weights,
+        fine_tuning_strategy=args.fine_tuning_strategy,
+        expected_gpu_memory='',
+        architectural_family='',
+        class_weighting=args.class_weighting,
+        sampling_strategy=args.sampling_strategy,
+        threshold_selection='F1_optimal',
+        experiment_name=args.experiment_name or '',
+        use_gradnorm=args.use_gradnorm,
+        gradnorm_alpha=args.gradnorm_alpha,
+        gradnorm_update_freq=args.gradnorm_update_freq,
+    )
+
+    output_dir = os.path.join(args.output_dir, config.experiment_name)
+
     print(f"\n{'='*50}")
-    print("All experiments completed!")
-    print(f"{'='*50}")
-    print(results_df.to_string(index=False))
+    print(f"Training: {config.model}")
+    print(f"  Pretrained weights:      {pretrained_weights}")
+    print(f"  Single-target strategy:  {single_target_strategy}")
+    print(f"  Learning rate:           {args.learning_rate}")
+    print(f"  Batch size:              {args.batch_size}")
+    print(f"  Epochs:                  {args.epochs}")
+    print(f"  Output dir:              {output_dir}")
+    print(f"{'='*50}\n")
+
+    train_model(
+        config=config,
+        data_dir=args.data_dir,
+        output_dir=output_dir,
+        biomarker_config=biomarker_config,
+        epochs=args.epochs
+    )
 
 
 if __name__ == "__main__":
