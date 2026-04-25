@@ -1,22 +1,15 @@
 from enum import IntEnum
 
-class Gender(IntEnum):
-    FEMALE = 0
-    MALE = 1
-    NA = 0
-
-    def convert(s):
-        if s == 'female': return Gender.FEMALE
-        elif s == 'male': return Gender.MALE
-        else: return Gender.NA
-
 class Condition(IntEnum):
     ABSENT = 0
     PRESENT = 1
-    NA = 0
 
+    @staticmethod
     def convert(s):
-        if s == 'ABSENT': return Condition.ABSENT
-        elif s == 'PRESENT': return Condition.PRESENT
-        else: return Condition.NA
+        value = str(s).upper()
+        if value == 'ABSENT':
+            return Condition.ABSENT
+        if value == 'PRESENT':
+            return Condition.PRESENT
+        raise ValueError(f"Unsupported condition label: {s}")
 
