@@ -11,7 +11,7 @@ class ClassifierDataset(Dataset):
     """
     Load images and corresponding labels for
     """
-    def __init__(self, data_path, biomarker_config, transforms=None, size=256, train=True):
+    def __init__(self, data_path, biomarker_config, transforms=None, size=256, train=True, csv_file=None):
         """
         Initialize data set
         Loads and preprocesses data
@@ -26,7 +26,7 @@ class ClassifierDataset(Dataset):
         self.size = size
         self.biomarker_config = biomarker_config
         
-        csv_name = 'train.csv' if train else 'val.csv'
+        csv_name = csv_file if csv_file is not None else ('train.csv' if train else 'val.csv')
         self.df = pd.read_csv(os.path.join(data_path, csv_name))
         
         # Apply age filtering for HIPAA compliance
@@ -190,6 +190,37 @@ class ClassifierDataset(Dataset):
         @return name : name of study at idx
         """
         return self.df.iloc[idx]['FILE'].split('.')[0]
+
+
+class PredictionDataset(Dataset):
+    """Prediction-only dataset that loads input images without labels."""
+
+    def __init__(self, data_path, transforms=None, size=256):
+        if not os.path.exists(data_path):
+            raise IOError(f'Path given for PredictionDataset {data_path} does not exist...')
+        self.data_path = data_path
+        valid_exts = (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp")
+        self.data = sorted(
+            fname for fname in os.listdir(data_path)
+            if fname.lower().endswith(valid_exts)
+        )
+        self.size = size
+        self.transforms = transforms
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        fname = self.data[idx]
+        xray = Image.open(os.path.join(self.data_path, fname))
+        xray = xray.resize((self.size, self.size), Image.LANCZOS)
+        xray = xray.convert('L')
+        if self.transforms:
+            xray = self.transforms(xray)
+        return xray
+
+    def at(self, idx):
+        return self.data[idx]
 
 if __name__ == "__main__":
     from torch.utils.data import DataLoader
