@@ -5,7 +5,7 @@ Handles experiment parameters for training and evaluation
 
 import ast
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import os
 
 
@@ -99,7 +99,7 @@ class ExperimentConfig:
         if not isinstance(self.learning_rate, list):
             self.learning_rate = [self.learning_rate]
 
-        self.image_augmentations = parse_augmentation_string(self.image_augmentations)
+        self.image_augmentations = normalize_augmentation_params(self.image_augmentations)
 
         if not self.experiment_name:
             self.experiment_name = self._generate_experiment_name()
@@ -156,7 +156,7 @@ class ExperimentConfig:
         }
 
 
-def parse_augmentation_string(aug_input: Any) -> Dict[str, Any]:
+def normalize_augmentation_params(aug_input: Any) -> Dict[str, Any]:
     """Normalize augmentation params into a validated parameter dictionary."""
     aug_params = DEFAULT_AUGMENTATION_PARAMS.copy()
 
@@ -188,6 +188,11 @@ def parse_augmentation_string(aug_input: Any) -> Dict[str, Any]:
     aug_params["imagenet_norm"] = bool(aug_params["imagenet_norm"])
 
     return aug_params
+
+
+def parse_augmentation_string(aug_input: Any) -> Dict[str, Any]:
+    """Backward-compatible alias for older imports/call sites."""
+    return normalize_augmentation_params(aug_input)
 
 
 def create_optimizer(model_parameters, config: 'ExperimentConfig'):

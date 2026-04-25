@@ -285,10 +285,6 @@ class FlexibleBiomarkerConfig:
                     binary_value = 0.0  # Default to negative class for missing values
                 elif str(value).upper() == biomarker.positive_class.upper():
                     binary_value = 1.0
-                elif str(value).upper() == "MALE" and biomarker.positive_class.upper() == "MALE":
-                    binary_value = 1.0
-                elif str(value).upper() == "FEMALE" and biomarker.positive_class.upper() == "MALE":
-                    binary_value = 0.0
                 else:
                     binary_value = 0.0
                 
