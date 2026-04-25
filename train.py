@@ -4,6 +4,7 @@ Uses the flexible biomarker configuration system for any task structure
 """
 
 import os
+import random
 import numpy as np
 import torch
 import torch.optim as optim
@@ -36,6 +37,30 @@ from utils.checkpoints import save_checkpoint, load_checkpoint
 # Set device
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {device}")
+
+
+def set_global_seed(seed: int, deterministic: bool = False) -> None:
+    """Set global random seeds for reproducible training runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    else:
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+
+
+def normalize_fine_tuning_strategy(strategy: str) -> str:
+    """Normalize fine-tuning strategy values to canonical internal names."""
+    normalized = strategy.strip().lower().replace("-", "_").replace(" ", "_")
+    if normalized in {"linear_probe", "linearprobe"}:
+        return "linear_probe"
+    return "full"
 
 
 def compute_class_weights_for_dataset(dataset, biomarker_config: FlexibleBiomarkerConfig):
@@ -385,8 +410,14 @@ def validate_epoch(model, dataloader, criterion, device, metrics_calc):
     return avg_loss, metrics, loss_components
 
 
-def train_model(config: ExperimentConfig, data_dir: str, output_dir: str, 
-                biomarker_config: FlexibleBiomarkerConfig, epochs: int = 100):
+def train_model(
+    config: ExperimentConfig,
+    data_dir: str,
+    output_dir: str,
+    biomarker_config: FlexibleBiomarkerConfig,
+    epochs: int = 100,
+    seed: int = 42,
+):
     """Main training function"""
     
     # Safety check: if directory exists and has important files, create a new one
@@ -430,6 +461,7 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
     logger.info(f"Data directory: {data_dir}")
     logger.info(f"Biomarker configuration: {biomarker_config.experiment_name}")
     logger.info(f"Total output size: {biomarker_config.total_output_size}")
+    logger.info(f"Seed: {seed}")
     
     # Create data transforms
     train_transform = create_data_transforms(config, is_training=True)
@@ -458,21 +490,33 @@ def train_model(config: ExperimentConfig, data_dir: str, output_dir: str,
         logger.info(f"Class weights computed for {len(class_weights)} binary biomarkers")
     
     # Create data loaders
+    data_loader_generator = torch.Generator()
+    data_loader_generator.manual_seed(seed)
+
+    def _seed_worker(worker_id: int) -> None:
+        worker_seed = seed + worker_id
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+        torch.manual_seed(worker_seed)
+
     if config.sampling_strategy == 'balanced_batch':
         train_sampler = create_balanced_sampler(train_dataset, biomarker_config)
         train_loader = DataLoader(
             train_dataset, batch_size=config.batch_size, 
-            sampler=train_sampler, num_workers=8, pin_memory=True
+            sampler=train_sampler, num_workers=8, pin_memory=True,
+            worker_init_fn=_seed_worker, generator=data_loader_generator
         )
     else:
         train_loader = DataLoader(
             train_dataset, batch_size=config.batch_size, 
-            shuffle=True, num_workers=8, pin_memory=True
+            shuffle=True, num_workers=8, pin_memory=True,
+            worker_init_fn=_seed_worker, generator=data_loader_generator
         )
     
     val_loader = DataLoader(
         val_dataset, batch_size=config.batch_size, 
-        shuffle=False, num_workers=8, pin_memory=True
+        shuffle=False, num_workers=8, pin_memory=True,
+        worker_init_fn=_seed_worker, generator=data_loader_generator
     )
     
     # Create model
@@ -786,8 +830,12 @@ def main():
                         choices=['balanced_batch', 'random'],
                         help='Sampling strategy for training DataLoader (default: balanced_batch)')
     parser.add_argument('--fine_tuning_strategy', default='Full fine-tuning',
-                        choices=['Full fine-tuning', 'linear_probe'],
+                        choices=['Full fine-tuning', 'full', 'linear_probe'],
                         help='Fine-tuning strategy (default: Full fine-tuning)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Global random seed for reproducibility (default: 42)')
+    parser.add_argument('--deterministic', action='store_true',
+                        help='Enable deterministic backend behavior (can reduce throughput)')
 
     # --- Per-model defaults (auto-detected from model name if not specified) ---
     parser.add_argument('--pretrained_weights',
@@ -804,6 +852,7 @@ def main():
                         help='Update GradNorm weights every N iterations (default: 10)')
 
     args = parser.parse_args()
+    set_global_seed(args.seed, deterministic=args.deterministic)
 
     # Load biomarker configuration
     print(f"Loading biomarker configuration from: {args.biomarker_config}")
@@ -813,10 +862,10 @@ def main():
     biomarker_config.print_summary()
 
     # Resolve per-model defaults for pretrained_weights and single_target_strategy
-    from config.experiment_config import get_model_defaults, DEFAULT_AUGMENTATIONS
     model_defaults = get_model_defaults(args.model)
     pretrained_weights = args.pretrained_weights or model_defaults['pretrained_weights']
     single_target_strategy = args.single_target_strategy or model_defaults['single_target_strategy']
+    fine_tuning_strategy = normalize_fine_tuning_strategy(args.fine_tuning_strategy)
 
     # Build ExperimentConfig directly from CLI args
     config = ExperimentConfig(
@@ -834,7 +883,7 @@ def main():
         multi_target_strategy='Shared backbone + task-specific heads',
         single_target_strategy=single_target_strategy,
         pretrained_weights=pretrained_weights,
-        fine_tuning_strategy=args.fine_tuning_strategy,
+        fine_tuning_strategy=fine_tuning_strategy,
         expected_gpu_memory='',
         architectural_family='',
         class_weighting=args.class_weighting,
@@ -855,6 +904,8 @@ def main():
     print(f"  Learning rate:           {args.learning_rate}")
     print(f"  Batch size:              {args.batch_size}")
     print(f"  Epochs:                  {args.epochs}")
+    print(f"  Seed:                    {args.seed}")
+    print(f"  Deterministic:           {args.deterministic}")
     print(f"  Output dir:              {output_dir}")
     print(f"{'='*50}\n")
 
@@ -863,7 +914,8 @@ def main():
         data_dir=args.data_dir,
         output_dir=output_dir,
         biomarker_config=biomarker_config,
-        epochs=args.epochs
+        epochs=args.epochs,
+        seed=args.seed,
     )
 
 
