@@ -430,8 +430,8 @@ def train_model(
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             original_output_dir = output_dir
             output_dir = f"{output_dir}_{timestamp}"
-            print(f"⚠️  Output directory {original_output_dir} exists with important files.")
-            print(f"📁 Using new directory: {output_dir}")
+            print(f"Warning: Output directory {original_output_dir} exists with important files.")
+            print(f"Using new directory: {output_dir}")
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -544,7 +544,7 @@ def train_model(
     gradnorm_trainer = None
     
     if use_gradnorm:
-        logger.info("🔄 Using GradNorm for loss balancing")
+        logger.info("Using GradNorm for loss balancing")
         gradnorm_alpha = getattr(config, 'gradnorm_alpha', 0.16)
         gradnorm_update_freq = getattr(config, 'gradnorm_update_freq', 10)
         
@@ -690,14 +690,14 @@ def train_model(
                     best_median_auroc = val_metrics['median_auroc']
                     best_epoch = epoch + 1
                     patience_counter = 0  # Reset patience counter
-                    training_logger.info(f"🎯 New best model! Median AUROC: {best_median_auroc:.4f} (Avg: {val_metrics['average_auroc']:.4f})")
+                    training_logger.info(f"New best model! Median AUROC: {best_median_auroc:.4f} (Avg: {val_metrics['average_auroc']:.4f})")
                 else:
                     patience_counter += 1
                     training_logger.info(f"No improvement. Patience: {patience_counter}/{patience}")
                     
                     # Early stopping check
                     if patience_counter >= patience:
-                        training_logger.info(f"⏹️ Early stopping triggered!")
+                        training_logger.info("Early stopping triggered!")
                         break
             else:
                 # No actual AUROC values available - fall back to MAE if continuous tasks exist
@@ -726,14 +726,14 @@ def train_model(
                     best_mae = current_mae
                     best_epoch = epoch + 1
                     patience_counter = 0  # Reset patience counter
-                    training_logger.info(f"🎯 New best model! Average MAE: {best_mae:.4f}")
+                    training_logger.info(f"New best model! Average MAE: {best_mae:.4f}")
                 else:
                     patience_counter += 1
                     training_logger.info(f"No improvement. Current MAE: {current_mae:.4f}, Best MAE: {best_mae:.4f}. Patience: {patience_counter}/{patience}")
                     
                     # Early stopping check
                     if patience_counter >= patience:
-                        training_logger.info(f"⏹️ Early stopping triggered!")
+                        training_logger.info("Early stopping triggered!")
                         break
             else:
                 # Fallback if no MAE values available

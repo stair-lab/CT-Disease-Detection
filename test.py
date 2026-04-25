@@ -371,7 +371,7 @@ def find_optimal_thresholds_on_validation(model: torch.nn.Module, biomarker_conf
                                          data_dir: str, config: ExperimentConfig, size: int = 256, batch_size: int = 16) -> Dict[str, float]:
     """Find optimal thresholds by running inference on validation set"""
     
-    print("🎯 Finding optimal thresholds on validation set...")
+    print("Finding optimal thresholds on validation set...")
     
     # Create validation dataset (use train=False to get val.csv)
     transform = create_test_transforms(config)
@@ -420,8 +420,8 @@ def find_optimal_thresholds_on_validation(model: torch.nn.Module, biomarker_conf
     optimization_metric = validation_config.get('optimization_metric', 'f1_score')
     fallback_threshold = validation_config.get('fallback_threshold', 0.5)
     
-    print(f"🎯 Using threshold search: {threshold_steps} steps from {threshold_range[0]} to {threshold_range[1]}")
-    print(f"🎯 Optimizing for: {optimization_metric}")
+    print(f"Using threshold search: {threshold_steps} steps from {threshold_range[0]} to {threshold_range[1]}")
+    print(f"Optimizing for: {optimization_metric}")
     
     # Convert to numpy
     predictions_np = all_predictions.numpy()
