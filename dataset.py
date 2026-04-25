@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import Dataset
 from PIL import Image
 
-from utils.labels import *
+from utils.labels import Condition
 from config.biomarker_config import FlexibleBiomarkerConfig
 
 class ClassifierDataset(Dataset):
